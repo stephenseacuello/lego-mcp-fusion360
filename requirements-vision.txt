@@ -1,0 +1,15 @@
+# LEGO MCP Fusion360 - Vision/ML Requirements (Optional)
+# Install with: pip install -r requirements-vision.txt
+
+# Computer Vision
+numpy>=1.24.0
+opencv-python>=4.8.0
+
+# YOLO11 object detection
+ultralytics>=8.0.0
+
+# Roboflow (alternative detection backend)
+# NOTE: roboflow and inference-sdk require Python <3.13
+# If on Python 3.13+, skip these or use a compatible venv
+# roboflow>=1.1.0
+# inference-sdk>=0.9.0

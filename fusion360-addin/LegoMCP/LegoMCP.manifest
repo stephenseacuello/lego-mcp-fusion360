@@ -1,0 +1,13 @@
+{
+    "autodeskProduct": "Fusion",
+    "type": "addin",
+    "id": "com.lego-mcp.fusion360-addin",
+    "author": "LEGO MCP Project",
+    "description": {
+        "": "MCP Server integration for generating LEGO bricks with CAD/CAM capabilities"
+    },
+    "version": "1.0.0",
+    "runOnStartup": true,
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

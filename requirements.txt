@@ -1,0 +1,21 @@
+# LEGO MCP Fusion360 - Core Requirements
+
+# Web Framework (Dashboard)
+flask>=2.3.0
+flask-socketio>=5.3.0
+
+# Async HTTP (MCP Server clients)
+aiohttp>=3.9.0
+
+# Slicer Service API
+fastapi>=0.109.0
+uvicorn>=0.27.0
+pydantic>=2.5.0
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

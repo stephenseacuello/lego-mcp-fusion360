@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - LEGO MCP{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>Dashboard</h1>
+</div>
+
+<!-- Status Cards -->
+<section class="section">
+    <h2 class="section-title">System Status</h2>
+    <div class="card-grid card-grid-3">
+        {% for service_id, service in status.services.items() %}
+        <div class="card status-card {{ service.status }}">
+            <div class="status-indicator">
+                <span class="status-dot {{ service.status }}"></span>
+            </div>
+            <div class="status-info">
+                <h3>{{ service.name }}</h3>
+                <p class="status-text">{{ service.status | title }}</p>
+                {% if service.latency_ms %}
+                <p class="status-detail">{{ service.latency_ms }}ms latency</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+        
+        <div class="card status-card">
+            <div class="status-indicator">
+                <span class="status-dot connected"></span>
+            </div>
+            <div class="status-info">
+                <h3>MCP Server</h3>
+                <p class="status-text">Running</p>
+                <p class="status-detail">{{ catalog_stats.total }} tools</p>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Quick Stats -->
+<section class="section">
+    <h2 class="section-title">Statistics</h2>
+    <div class="card-grid card-grid-4">
+        <div class="card stat-card">
+            <div class="stat-value">{{ catalog_stats.total }}</div>
+            <div class="stat-label">Brick Types</div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-value">{{ perf_stats.total_operations | default(0) }}</div>
+            <div class="stat-label">Operations</div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-value">{{ file_stats.total_files }}</div>
+            <div class="stat-label">Files</div>
+        </div>
+        <div class="card stat-card">
+            <div class="stat-value">{{ file_stats.total_size_formatted }}</div>
+            <div class="stat-label">Storage Used</div>
+        </div>
+    </div>
+</section>
+
+<!-- Quick Actions -->
+<section class="section">
+    <h2 class="section-title">Quick Actions</h2>
+    <div class="card-grid card-grid-4">
+        <a href="{{ url_for('catalog.list_bricks') }}" class="card action-card">
+            <span class="action-icon">📦</span>
+            <span class="action-text">Browse Catalog</span>
+        </a>
+        <a href="{{ url_for('builder.builder') }}" class="card action-card">
+            <span class="action-icon">🔨</span>
+            <span class="action-text">Build Custom</span>
+        </a>
+        <a href="{{ url_for('files.browse') }}" class="card action-card">
+            <span class="action-icon">📁</span>
+            <span class="action-text">View Files</span>
+        </a>
+        <a href="{{ url_for('tools.playground') }}" class="card action-card">
+            <span class="action-icon">🧪</span>
+            <span class="action-text">Tool Playground</span>
+        </a>
+    </div>
+</section>
+
+<!-- Recent Operations -->
+<section class="section">
+    <div class="section-header">
+        <h2 class="section-title">Recent Activity</h2>
+        <a href="{{ url_for('history.history_list') }}" class="link">View All →</a>
+    </div>
+    
+    {% if recent_ops %}
+    <div class="card">
+        <div class="operation-list">
+            {% for op in recent_ops[:5] %}
+            <div class="operation-item {{ op.status | default('completed') }}">
+                <span class="operation-status">
+                    {% if op.status == 'completed' %}✓{% elif op.status == 'failed' %}✗{% else %}○{% endif %}
+                </span>
+                <span class="operation-type">{{ op.type | default(op.operation_type) | replace('_', ' ') | title }}</span>
+                <span class="operation-name">{{ op.component_name | default('') }}</span>
+                <span class="operation-time">{{ op.datetime | default('') }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    <div class="card empty-state">
+        <p>No recent operations</p>
+    </div>
+    {% endif %}
+</section>
+
+<!-- Popular Bricks -->
+<section class="section">
+    <div class="section-header">
+        <h2 class="section-title">Common Bricks</h2>
+        <a href="{{ url_for('catalog.list_bricks') }}" class="link">View All →</a>
+    </div>
+    
+    <div class="brick-grid">
+        {% for brick in popular_bricks %}
+        <a href="{{ url_for('catalog.brick_detail', brick_id=brick.id) }}" class="brick-card">
+            <div class="brick-preview">
+                <div class="brick-placeholder">
+                    {{ brick.studs_x }}×{{ brick.studs_y }}
+                </div>
+            </div>
+            <div class="brick-info">
+                <h4>{{ brick.name }}</h4>
+                <p>{{ brick.width_mm }}×{{ brick.depth_mm }}×{{ brick.height_mm }}mm</p>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+// Dashboard-specific JavaScript
+document.addEventListener('DOMContentLoaded', function() {
+    // Auto-refresh status every 30 seconds
+    setInterval(function() {
+        fetch('/api/status')
+            .then(r => r.json())
+            .then(data => {
+                // Update status indicators
+                document.querySelectorAll('.status-card').forEach(card => {
+                    // Update logic here
+                });
+            })
+            .catch(console.error);
+    }, 30000);
+});
+</script>
+{% endblock %}

@@ -1,0 +1,5 @@
+# LEGO MCP Fusion360 - MCP Server Requirements
+# Install with: pip install -r requirements-mcp.txt
+
+# MCP SDK (Model Context Protocol)
+mcp>=1.0.0
