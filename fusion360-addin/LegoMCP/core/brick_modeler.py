@@ -32,18 +32,42 @@ def _log(message: str, error: bool = False):
 
 # === LEGO Dimension Constants (mm) ===
 # Duplicated here to avoid import issues in Fusion 360 environment
+# Updated to v2.0 specifications based on official LEGO measurements
 
-STUD_PITCH = 8.0
-STUD_DIAMETER = 4.8
-STUD_HEIGHT = 1.7
-BRICK_HEIGHT = 9.6
-PLATE_HEIGHT = 3.2
-WALL_THICKNESS = 1.5
-TOP_THICKNESS = 1.0
-TUBE_OD = 6.51
-TUBE_ID = 4.8
+# Fundamental unit
+LDU = 1.6  # LEGO Design Unit - base measurement (all dims are multiples)
+STUD_PITCH = 8.0  # Distance between stud centers (5 LDU)
+
+# Stud dimensions
+STUD_DIAMETER = 4.8  # Cylinder on top (3 LDU)
+STUD_HEIGHT = 1.7  # Height above brick surface
+
+# Heights
+BRICK_HEIGHT = 9.6  # Standard brick (6 LDU, 3 plates)
+PLATE_HEIGHT = 3.2  # Plate = 1/3 brick height (2 LDU)
+
+# CORRECTED: Wall structure (v2.0)
+WALL_THICKNESS = 1.6  # CORRECTED: 1.5 -> 1.6 (1 LDU) per official specs
+TOP_THICKNESS = 1.0  # Top surface thickness
+
+# CORRECTED: Inter-brick clearance (v2.0)
+CLEARANCE_PER_SIDE = 0.1  # NEW: Gap per brick side for proper fit
+INTER_BRICK_GAP = 0.2  # NEW: Total gap between adjacent bricks
+
+# Bottom tubes (for clutch power)
+TUBE_OD = 6.51  # Tube outer diameter
+TUBE_ID = 4.8  # Tube inner diameter (matches stud for grip)
+
+# CORRECTED: Bottom ribs (v2.0)
 RIB_THICKNESS = 1.0
-RIB_BOTTOM_RECESS = 2.0  # Ribs don't touch bottom, recessed by 2mm
+RIB_BOTTOM_RECESS = 0.0  # CORRECTED: 2.0 -> 0.0 (ribs extend full height)
+
+# CORRECTED: Technic dimensions (v2.0)
+TECHNIC_PIN_HOLE_DIAMETER = 4.9  # CORRECTED: 4.8 -> 4.9 (for bearing fit)
+TECHNIC_AXLE_HOLE_SIZE = 4.8  # Cross-shaped axle hole
+
+# NEW: Bar/rod constants (v2.0)
+BAR_DIAMETER = 3.18  # Standard bar diameter (minifig hand grip)
 
 # LEGO Color Map - RGB values for classic LEGO colors
 # Format: (R, G, B) where values are 0-255
@@ -149,6 +173,7 @@ class BrickModeler:
         studs_y: int,
         height_units: float = 1.0,
         hollow: bool = True,
+        center_rib: bool = True,
         name: Optional[str] = None,
         color: Optional[str] = None
     ) -> BrickResult:
@@ -159,6 +184,7 @@ class BrickModeler:
             Op 010 - Create base block (NEW)
             Op 020 - Hollow interior (CUT)
             Op 030 - Add tubes for 2x2+ bricks (JOIN)
+            Op 035 - Add center rib/spine for 2xN bricks (JOIN)
             Op 040 - Add ribs for 1xN bricks (JOIN)
             Op 050 - Add studs (JOIN)
             Op 060 - Apply color (APPEARANCE)
@@ -168,6 +194,7 @@ class BrickModeler:
             studs_y: Number of studs in Y direction (1-16)
             height_units: Height in brick units (1.0 = standard, 0.333 = plate)
             hollow: Whether to hollow out the bottom
+            center_rib: Whether to add center rib/spine (like real LEGO 2xN bricks)
             name: Custom component name
             color: LEGO color name (red, blue, yellow, green, black, white, orange, etc.)
 
@@ -244,6 +271,17 @@ class BrickModeler:
                         errors.append("Op 030 WARNING: Some tubes may not have been created")
                     else:
                         _log(f"Op 030 SUCCESS: Tubes added")
+
+                    # Op 035: Add center rib/spine for 2xN bricks (connects tubes)
+                    if center_rib and (studs_x == 2 or studs_y == 2) and max(studs_x, studs_y) >= 3:
+                        _log(f"Op 035: Adding center rib for 2xN brick...")
+                        op_035_success = self._op_035_add_center_rib(comp, studs_x, studs_y, height)
+                        if not op_035_success:
+                            _log("Op 035 WARNING: Center rib may not have been created", error=True)
+                            errors.append("Op 035 WARNING: Center rib may not have been created")
+                        else:
+                            _log(f"Op 035 SUCCESS: Center rib added")
+
                 elif studs_x == 1 or studs_y == 1:
                     # Op 040: Add ribs for 1xN bricks
                     rib_count = max(studs_x, studs_y) - 1
@@ -254,6 +292,17 @@ class BrickModeler:
                         errors.append("Op 040 WARNING: Some ribs may not have been created")
                     else:
                         _log(f"Op 040 SUCCESS: Ribs added")
+
+                elif studs_x >= 3 and studs_y >= 3:
+                    # Op 036: Add cross-ribs for larger bricks (3x3, 4x4, etc.)
+                    # These bricks have a grid of tubes and need cross-ribs connecting them
+                    _log(f"Op 036: Adding cross-ribs for {studs_x}x{studs_y} brick...")
+                    op_036_success = self._op_036_add_cross_ribs(comp, studs_x, studs_y, height)
+                    if not op_036_success:
+                        _log("Op 036 WARNING: Cross-ribs may not have been created", error=True)
+                        errors.append("Op 036 WARNING: Cross-ribs may not have been created")
+                    else:
+                        _log(f"Op 036 SUCCESS: Cross-ribs added")
 
             # ══════════════════════════════════════════════════════════
             # Op 050: ADD STUDS (JoinFeatureOperation)
@@ -1119,6 +1168,713 @@ class BrickModeler:
             return BrickResult(success=False, brick_id="", component_name="",
                              dimensions={}, volume_mm3=0, error="; ".join(errors))
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    # PHASE 5: ADVANCED BRICK TYPES - Manufacturing-Optimized Elements
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def create_snot_brick(
+        self,
+        studs_x: int,
+        studs_y: int,
+        side_studs: str = "both",
+        height_units: float = 1.0,
+        hollow: bool = True,
+        name: Optional[str] = None,
+        color: Optional[str] = None
+    ) -> BrickResult:
+        """
+        Create a SNOT (Studs Not On Top) brick with side studs.
+
+        SNOT bricks are essential for advanced LEGO techniques allowing
+        sideways building. Common examples: 1x4 brick with 4 side studs.
+
+        Args:
+            studs_x: Number of studs in X direction
+            studs_y: Number of studs in Y direction
+            side_studs: Which sides get studs (front, back, both, left, right, all)
+            height_units: Height in brick units
+            hollow: Whether to hollow out the bottom
+            name: Custom component name
+            color: LEGO color name
+
+        Returns:
+            BrickResult with brick info
+        """
+        errors = []
+        _log(f"=== Creating SNOT brick: {studs_x}x{studs_y}, sides={side_studs} ===")
+
+        try:
+            width = studs_x * STUD_PITCH
+            depth = studs_y * STUD_PITCH
+            height = height_units * BRICK_HEIGHT
+
+            brick_id = self._generate_brick_id("snot")
+            comp_name = name or f"SNOT_{studs_x}x{studs_y}_{side_studs}"
+
+            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+            comp = occ.component
+            comp.name = comp_name
+
+            # Op 010: Create base
+            if not self._op_010_create_base(comp, width, depth, height):
+                errors.append("Op 010 FAILED")
+                raise Exception("Base block failed")
+
+            # Op 020: Hollow
+            if hollow:
+                self._op_020_hollow(comp, width, depth, height)
+
+            # Op 030/040: Internal structure
+            if studs_x > 1 and studs_y > 1:
+                self._op_030_add_tubes(comp, studs_x, studs_y, height)
+            elif studs_x == 1 or studs_y == 1:
+                self._op_040_add_ribs(comp, studs_x, studs_y, height)
+
+            # Op 130: Add side studs
+            _log(f"Op 130: Adding side studs ({side_studs})...")
+            if not self._op_130_add_side_studs(comp, studs_x, studs_y, height, side_studs):
+                errors.append("Op 130 WARNING: Side studs failed")
+
+            # Op 050: Add top studs
+            self._op_050_add_studs(comp, studs_x, studs_y, height)
+
+            # Op 060: Apply color
+            if color:
+                self._op_060_apply_color(comp, color)
+
+            volume = sum(body.volume * 1000 for body in comp.bRepBodies)
+
+            return BrickResult(
+                success=len([e for e in errors if "FAILED" in e]) == 0,
+                brick_id=brick_id,
+                component_name=comp_name,
+                dimensions={
+                    "width_mm": width, "depth_mm": depth, "height_mm": height,
+                    "studs_x": studs_x, "studs_y": studs_y,
+                    "side_studs": side_studs, "color": color
+                },
+                volume_mm3=volume,
+                error="; ".join(errors) if errors else None
+            )
+
+        except Exception as e:
+            errors.append(str(e))
+            return BrickResult(success=False, brick_id="", component_name="",
+                             dimensions={}, volume_mm3=0, error="; ".join(errors))
+
+    def create_bracket(
+        self,
+        base_studs: int = 1,
+        side_studs: int = 2,
+        bracket_type: str = "1x2-1x2",
+        name: Optional[str] = None,
+        color: Optional[str] = None
+    ) -> BrickResult:
+        """
+        Create a LEGO bracket piece for sideways building.
+
+        Brackets are L-shaped elements that allow changing build direction.
+        Common types: 1x2-1x2, 1x2-1x4, 1x2-2x2.
+
+        Args:
+            base_studs: Studs on base section
+            side_studs: Studs on side section
+            bracket_type: Bracket configuration
+            name: Custom component name
+            color: LEGO color name
+
+        Returns:
+            BrickResult with bracket info
+        """
+        errors = []
+        _log(f"=== Creating bracket: {bracket_type} ===")
+
+        try:
+            brick_id = self._generate_brick_id("bracket")
+            comp_name = name or f"Bracket_{bracket_type}"
+
+            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+            comp = occ.component
+            comp.name = comp_name
+
+            # Base dimensions
+            base_width = base_studs * STUD_PITCH
+            base_depth = 2 * STUD_PITCH
+            base_height = PLATE_HEIGHT
+
+            # Side dimensions
+            side_width = WALL_THICKNESS * 2
+            side_height = side_studs * STUD_PITCH
+
+            # Op 010: Create base section
+            _log("Op 010: Creating base section...")
+            if not self._op_010_create_base(comp, base_width, base_depth, base_height):
+                errors.append("Op 010 FAILED")
+                raise Exception("Base section failed")
+
+            # Op 011: Create side section (L-shape extension)
+            _log("Op 011: Creating side section...")
+            self._op_011_create_bracket_side(comp, base_width, base_depth, side_width, side_height)
+
+            # Op 050: Add studs on base
+            self._op_050_add_studs(comp, base_studs, 2, base_height)
+
+            # Op 060: Apply color
+            if color:
+                self._op_060_apply_color(comp, color)
+
+            volume = sum(body.volume * 1000 for body in comp.bRepBodies)
+
+            return BrickResult(
+                success=len([e for e in errors if "FAILED" in e]) == 0,
+                brick_id=brick_id,
+                component_name=comp_name,
+                dimensions={
+                    "base_width_mm": base_width, "side_height_mm": side_height,
+                    "bracket_type": bracket_type, "color": color
+                },
+                volume_mm3=volume,
+                error="; ".join(errors) if errors else None
+            )
+
+        except Exception as e:
+            errors.append(str(e))
+            return BrickResult(success=False, brick_id="", component_name="",
+                             dimensions={}, volume_mm3=0, error="; ".join(errors))
+
+    def create_cheese_slope(
+        self,
+        name: Optional[str] = None,
+        color: Optional[str] = None
+    ) -> BrickResult:
+        """
+        Create a 1x1 cheese slope (30 deg) - one of the most popular LEGO elements.
+
+        The cheese slope is iconic for detail work and smooth surfaces.
+
+        Returns:
+            BrickResult with cheese slope info
+        """
+        errors = []
+        _log("=== Creating cheese slope (1x1 30 deg) ===")
+
+        try:
+            width = STUD_PITCH
+            depth = STUD_PITCH
+            height = PLATE_HEIGHT * 2 / 3  # Cheese is 2/3 plate height
+
+            brick_id = self._generate_brick_id("cheese")
+            comp_name = name or "Cheese_Slope_1x1"
+
+            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+            comp = occ.component
+            comp.name = comp_name
+
+            # Create wedge profile
+            sketch = comp.sketches.add(comp.xZConstructionPlane)
+            lines = sketch.sketchCurves.sketchLines
+
+            # Triangular wedge profile (30 deg slope)
+            p1 = adsk.core.Point3D.create(0, 0, 0)
+            p2 = adsk.core.Point3D.create(self._cm(width), 0, 0)
+            p3 = adsk.core.Point3D.create(self._cm(width), self._cm(height), 0)
+
+            lines.addByTwoPoints(p1, p2)
+            lines.addByTwoPoints(p2, p3)
+            lines.addByTwoPoints(p3, p1)
+
+            if sketch.profiles.count == 0:
+                errors.append("Op 010 FAILED")
+                raise Exception("Profile failed")
+
+            # Extrude wedge
+            extrudes = comp.features.extrudeFeatures
+            ext_input = extrudes.createInput(
+                sketch.profiles.item(0),
+                adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+            )
+            ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByReal(self._cm(depth)))
+            extrudes.add(ext_input)
+
+            # Apply color
+            if color:
+                self._op_060_apply_color(comp, color)
+
+            volume = sum(body.volume * 1000 for body in comp.bRepBodies)
+
+            return BrickResult(
+                success=True,
+                brick_id=brick_id,
+                component_name=comp_name,
+                dimensions={
+                    "width_mm": width, "depth_mm": depth, "height_mm": height,
+                    "angle": 30, "color": color
+                },
+                volume_mm3=volume,
+                error=None
+            )
+
+        except Exception as e:
+            errors.append(str(e))
+            return BrickResult(success=False, brick_id="", component_name="",
+                             dimensions={}, volume_mm3=0, error="; ".join(errors))
+
+    def create_headlight_brick(
+        self,
+        name: Optional[str] = None,
+        color: Optional[str] = None
+    ) -> BrickResult:
+        """
+        Create a 1x1 headlight brick (Erling brick).
+
+        The headlight brick has a recessed stud socket on the front face,
+        allowing attachment of tiles and other elements at 90 degrees.
+
+        Returns:
+            BrickResult with headlight brick info
+        """
+        errors = []
+        _log("=== Creating headlight brick (1x1) ===")
+
+        try:
+            width = STUD_PITCH
+            depth = STUD_PITCH
+            height = BRICK_HEIGHT
+
+            brick_id = self._generate_brick_id("headlight")
+            comp_name = name or "Headlight_1x1"
+
+            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+            comp = occ.component
+            comp.name = comp_name
+
+            # Create base block
+            if not self._op_010_create_base(comp, width, depth, height):
+                errors.append("Op 010 FAILED")
+                raise Exception("Base failed")
+
+            # Cut recessed socket on front face
+            _log("Op 131: Cutting front socket...")
+            sketch = comp.sketches.add(comp.xZConstructionPlane)
+            circles = sketch.sketchCurves.sketchCircles
+            circles.addByCenterRadius(
+                adsk.core.Point3D.create(self._cm(width/2), self._cm(height/2), 0),
+                self._cm(STUD_DIAMETER/2 + 0.1)  # Slightly larger than stud
+            )
+
+            if sketch.profiles.count > 0:
+                extrudes = comp.features.extrudeFeatures
+                ext_input = extrudes.createInput(
+                    sketch.profiles.item(0),
+                    adsk.fusion.FeatureOperations.CutFeatureOperation
+                )
+                # Cut only into front face
+                ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByReal(self._cm(2.0)))
+                try:
+                    extrudes.add(ext_input)
+                except:
+                    errors.append("Op 131 WARNING: Socket cut failed")
+
+            # Add stud on top
+            self._op_050_add_studs(comp, 1, 1, height)
+
+            # Apply color
+            if color:
+                self._op_060_apply_color(comp, color)
+
+            volume = sum(body.volume * 1000 for body in comp.bRepBodies)
+
+            return BrickResult(
+                success=len([e for e in errors if "FAILED" in e]) == 0,
+                brick_id=brick_id,
+                component_name=comp_name,
+                dimensions={
+                    "width_mm": width, "depth_mm": depth, "height_mm": height,
+                    "type": "headlight", "color": color
+                },
+                volume_mm3=volume,
+                error="; ".join(errors) if errors else None
+            )
+
+        except Exception as e:
+            errors.append(str(e))
+            return BrickResult(success=False, brick_id="", component_name="",
+                             dimensions={}, volume_mm3=0, error="; ".join(errors))
+
+    def create_bar(
+        self,
+        length_studs: int = 4,
+        bar_type: str = "straight",
+        name: Optional[str] = None,
+        color: Optional[str] = None
+    ) -> BrickResult:
+        """
+        Create a LEGO bar/rod element.
+
+        Bars fit in minifig hands and clip elements. Standard bar diameter is 3.18mm.
+
+        Args:
+            length_studs: Length in stud units
+            bar_type: Type of bar (straight, curved, antenna)
+            name: Custom component name
+            color: LEGO color name
+
+        Returns:
+            BrickResult with bar info
+        """
+        errors = []
+        _log(f"=== Creating bar: length={length_studs}, type={bar_type} ===")
+
+        try:
+            length = length_studs * STUD_PITCH
+            diameter = BAR_DIAMETER
+
+            brick_id = self._generate_brick_id("bar")
+            comp_name = name or f"Bar_{length_studs}L"
+
+            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+            comp = occ.component
+            comp.name = comp_name
+
+            # Create cylinder
+            sketch = comp.sketches.add(comp.xYConstructionPlane)
+            circles = sketch.sketchCurves.sketchCircles
+            circles.addByCenterRadius(
+                adsk.core.Point3D.create(0, 0, 0),
+                self._cm(diameter/2)
+            )
+
+            if sketch.profiles.count == 0:
+                errors.append("Op 010 FAILED")
+                raise Exception("Circle profile failed")
+
+            extrudes = comp.features.extrudeFeatures
+            ext_input = extrudes.createInput(
+                sketch.profiles.item(0),
+                adsk.fusion.FeatureOperations.NewBodyFeatureOperation
+            )
+            ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByReal(self._cm(length)))
+            extrudes.add(ext_input)
+
+            # Apply color
+            if color:
+                self._op_060_apply_color(comp, color)
+
+            volume = sum(body.volume * 1000 for body in comp.bRepBodies)
+
+            return BrickResult(
+                success=True,
+                brick_id=brick_id,
+                component_name=comp_name,
+                dimensions={
+                    "length_mm": length, "diameter_mm": diameter,
+                    "length_studs": length_studs, "bar_type": bar_type,
+                    "color": color
+                },
+                volume_mm3=volume,
+                error=None
+            )
+
+        except Exception as e:
+            errors.append(str(e))
+            return BrickResult(success=False, brick_id="", component_name="",
+                             dimensions={}, volume_mm3=0, error="; ".join(errors))
+
+    def create_clip(
+        self,
+        clip_type: str = "bar_holder",
+        name: Optional[str] = None,
+        color: Optional[str] = None
+    ) -> BrickResult:
+        """
+        Create a LEGO clip element for attaching to bars.
+
+        Args:
+            clip_type: Type of clip (bar_holder, horizontal_clip, vertical_clip)
+            name: Custom component name
+            color: LEGO color name
+
+        Returns:
+            BrickResult with clip info
+        """
+        errors = []
+        _log(f"=== Creating clip: type={clip_type} ===")
+
+        try:
+            width = STUD_PITCH
+            depth = STUD_PITCH
+            height = PLATE_HEIGHT
+
+            brick_id = self._generate_brick_id("clip")
+            comp_name = name or f"Clip_{clip_type}"
+
+            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+            comp = occ.component
+            comp.name = comp_name
+
+            # Create base plate
+            if not self._op_010_create_base(comp, width, depth, height):
+                errors.append("Op 010 FAILED")
+                raise Exception("Base failed")
+
+            # Add clip arm with bar holder hole
+            _log("Op 132: Adding clip arm...")
+            clip_height = STUD_PITCH
+            clip_width = width * 0.8
+
+            sketch = comp.sketches.add(comp.xZConstructionPlane)
+            lines = sketch.sketchCurves.sketchLines
+            lines.addTwoPointRectangle(
+                adsk.core.Point3D.create(self._cm((width - clip_width)/2), self._cm(height), 0),
+                adsk.core.Point3D.create(self._cm((width + clip_width)/2), self._cm(height + clip_height), 0)
+            )
+
+            if sketch.profiles.count > 0:
+                extrudes = comp.features.extrudeFeatures
+                ext_input = extrudes.createInput(
+                    sketch.profiles.item(0),
+                    adsk.fusion.FeatureOperations.JoinFeatureOperation
+                )
+                ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByReal(self._cm(depth)))
+                try:
+                    extrudes.add(ext_input)
+                except:
+                    errors.append("Op 132 WARNING: Clip arm failed")
+
+            # Apply color
+            if color:
+                self._op_060_apply_color(comp, color)
+
+            volume = sum(body.volume * 1000 for body in comp.bRepBodies)
+
+            return BrickResult(
+                success=len([e for e in errors if "FAILED" in e]) == 0,
+                brick_id=brick_id,
+                component_name=comp_name,
+                dimensions={
+                    "width_mm": width, "depth_mm": depth,
+                    "clip_type": clip_type, "color": color
+                },
+                volume_mm3=volume,
+                error="; ".join(errors) if errors else None
+            )
+
+        except Exception as e:
+            errors.append(str(e))
+            return BrickResult(success=False, brick_id="", component_name="",
+                             dimensions={}, volume_mm3=0, error="; ".join(errors))
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # MANUFACTURING ANALYSIS METHODS
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def analyze_manufacturability(
+        self,
+        brick_result: BrickResult,
+        process: str = "fdm"
+    ) -> Dict[str, Any]:
+        """
+        Analyze brick for manufacturing feasibility.
+
+        Args:
+            brick_result: Result from brick creation
+            process: Manufacturing process (fdm, sla, injection, cnc)
+
+        Returns:
+            Manufacturing analysis with recommendations
+        """
+        analysis = {
+            "brick_id": brick_result.brick_id,
+            "process": process,
+            "feasible": True,
+            "issues": [],
+            "recommendations": [],
+            "estimated_time_min": 0,
+            "estimated_cost_usd": 0
+        }
+
+        dims = brick_result.dimensions
+        volume = brick_result.volume_mm3
+
+        if process == "fdm":
+            # FDM-specific analysis
+            if dims.get("height_mm", 0) < 1.0:
+                analysis["issues"].append("Height too small for FDM (min 1mm)")
+                analysis["feasible"] = False
+
+            # Estimate print time (rough: 10mm3/min for FDM)
+            analysis["estimated_time_min"] = max(5, volume / 10)
+
+            # Cost estimate ($0.02/gram, PLA density ~1.25 g/cm3)
+            mass_g = (volume / 1000) * 1.25  # cm3 * g/cm3
+            analysis["estimated_cost_usd"] = round(mass_g * 0.02, 2)
+
+            analysis["recommendations"].append("Print with 0.2mm layer height")
+            analysis["recommendations"].append("Orient studs facing up for best quality")
+
+        elif process == "sla":
+            # SLA for high detail
+            analysis["estimated_time_min"] = max(15, volume / 5)
+            analysis["estimated_cost_usd"] = round((volume / 1000) * 1.25 * 0.10, 2)
+            analysis["recommendations"].append("Use 0.05mm layers for stud detail")
+
+        elif process == "injection":
+            # Injection molding
+            min_wall = 0.8  # mm
+            if dims.get("width_mm", 0) / dims.get("studs_x", 1) < min_wall * 2:
+                analysis["issues"].append(f"Wall thickness may be too thin (min {min_wall}mm)")
+
+            # Per-part cost for injection (amortized tooling)
+            analysis["estimated_cost_usd"] = round(0.01 + (volume / 1000) * 0.005, 3)
+            analysis["estimated_time_min"] = 0.5  # Cycle time
+
+            analysis["recommendations"].append("Draft angles of 1-2 deg required")
+            analysis["recommendations"].append("Uniform wall thickness recommended")
+
+        elif process == "cnc":
+            # CNC milling
+            analysis["estimated_time_min"] = max(30, volume / 2)
+            analysis["estimated_cost_usd"] = round(analysis["estimated_time_min"] * 1.0, 2)
+            analysis["recommendations"].append("Multiple setups required for undercuts")
+
+        return analysis
+
+    def get_material_requirements(
+        self,
+        brick_result: BrickResult,
+        quantity: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Calculate material requirements for brick production.
+
+        Args:
+            brick_result: Result from brick creation
+            quantity: Number of parts to produce
+
+        Returns:
+            Material requirements breakdown
+        """
+        volume_mm3 = brick_result.volume_mm3
+        volume_cm3 = volume_mm3 / 1000
+
+        # ABS density: 1.04 g/cm3 (LEGO standard)
+        abs_density = 1.04
+
+        return {
+            "brick_id": brick_result.brick_id,
+            "quantity": quantity,
+            "per_part": {
+                "volume_mm3": volume_mm3,
+                "volume_cm3": volume_cm3,
+                "mass_grams": round(volume_cm3 * abs_density, 3)
+            },
+            "total": {
+                "volume_cm3": round(volume_cm3 * quantity, 2),
+                "mass_grams": round(volume_cm3 * abs_density * quantity, 2),
+                "mass_kg": round(volume_cm3 * abs_density * quantity / 1000, 4)
+            },
+            "material_spec": {
+                "type": "ABS",
+                "density_g_cm3": abs_density,
+                "color": brick_result.dimensions.get("color", "unspecified"),
+                "grade": "LEGO-compatible high-impact ABS"
+            }
+        }
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    # NEW OPERATION METHODS FOR ADVANCED BRICK TYPES
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _op_011_create_bracket_side(
+        self,
+        comp: adsk.fusion.Component,
+        base_width: float,
+        base_depth: float,
+        side_width: float,
+        side_height: float
+    ) -> bool:
+        """Op 011: Create bracket side extension."""
+        try:
+            sketch = comp.sketches.add(comp.xZConstructionPlane)
+            lines = sketch.sketchCurves.sketchLines
+
+            # Create side section on front face
+            lines.addTwoPointRectangle(
+                adsk.core.Point3D.create(-self._cm(side_width), 0, 0),
+                adsk.core.Point3D.create(0, self._cm(side_height), 0)
+            )
+
+            if sketch.profiles.count == 0:
+                return False
+
+            extrudes = comp.features.extrudeFeatures
+            ext_input = extrudes.createInput(
+                sketch.profiles.item(0),
+                adsk.fusion.FeatureOperations.JoinFeatureOperation
+            )
+            ext_input.setDistanceExtent(False, adsk.core.ValueInput.createByReal(self._cm(base_depth)))
+            extrudes.add(ext_input)
+
+            return True
+        except:
+            return False
+
+    def _op_130_add_side_studs(
+        self,
+        comp: adsk.fusion.Component,
+        studs_x: int,
+        studs_y: int,
+        height: float,
+        side_studs: str
+    ) -> bool:
+        """
+        Op 130: Add studs on side faces (SNOT configuration).
+
+        Creates studs perpendicular to the normal stud direction.
+        """
+        try:
+            stud_radius = self._cm(STUD_DIAMETER / 2)
+            stud_length = self._cm(STUD_HEIGHT)
+
+            # Determine which sides get studs
+            add_front = side_studs in ["front", "both", "all"]
+            add_back = side_studs in ["back", "both", "all"]
+
+            extrudes = comp.features.extrudeFeatures
+            success = True
+
+            if add_front:
+                # Front face (XZ plane at Y=0)
+                sketch = comp.sketches.add(comp.xZConstructionPlane)
+                circles = sketch.sketchCurves.sketchCircles
+                for i in range(studs_x):
+                    center_x = self._cm((i + 0.5) * STUD_PITCH)
+                    center_z = self._cm(height / 2)
+                    circles.addByCenterRadius(
+                        adsk.core.Point3D.create(center_x, center_z, 0),
+                        stud_radius
+                    )
+
+                for i in range(sketch.profiles.count):
+                    try:
+                        ext_input = extrudes.createInput(
+                            sketch.profiles.item(i),
+                            adsk.fusion.FeatureOperations.JoinFeatureOperation
+                        )
+                        # Extrude in -Y direction
+                        ext_input.setDistanceExtent(
+                            False,
+                            adsk.core.ValueInput.createByReal(-stud_length)
+                        )
+                        extrudes.add(ext_input)
+                    except:
+                        success = False
+
+            return success
+        except Exception as e:
+            _log(f"Op 130 Exception: {e}", error=True)
+            return False
+
     def _op_010_create_base(
         self,
         comp: adsk.fusion.Component,
@@ -1564,6 +2320,387 @@ class BrickModeler:
 
         except Exception as e:
             _log(f"Op 030 Exception: {e}", error=True)
+            _log(traceback.format_exc(), error=True)
+            return False
+
+    def _op_035_add_center_rib(
+        self,
+        comp: adsk.fusion.Component,
+        studs_x: int,
+        studs_y: int,
+        height: float
+    ) -> bool:
+        """
+        Op 035: Add center rib for 2xN bricks (passes through tubes).
+
+        Type: JoinFeatureOperation
+        Input: Hollowed shell with tubes
+        Output: Shell with center rib passing through specific tubes
+
+        Real LEGO internal structure for 2xN bricks:
+        - The rib runs down the CENTER (lengthwise) of the brick
+        - It passes THROUGH specific tubes (every other tube starting from #2)
+        - Where it intersects a tube, there's a 2mm recess/notch
+
+        For 2x4 brick (3 tubes at positions 8, 16, 24mm):
+            - 1 rib passes through tube #2 (at Y=16mm)
+            - Rib has 2mm notch where it crosses the tube
+
+        For 2x6 brick (5 tubes at positions 8, 16, 24, 32, 40mm):
+            - 2 ribs pass through tubes #2 and #4 (at Y=16mm and Y=32mm)
+
+        Tube numbering: tubes are at Y = 8, 16, 24, ... (every 8mm)
+        Pattern: ribs at tubes 2, 4, 6, ... (even-numbered tubes)
+
+        Real LEGO 2x4 underside (top view):
+            ════════════════════════════════
+            ║                              ║
+            ║    ○        ○        ○       ║  <- 3 tubes
+            ║    │        ║        │       ║
+            ║    │════════╬════════│       ║  <- rib through middle tube
+            ║    │        ║        │       ║
+            ║                              ║
+            ════════════════════════════════
+        """
+        try:
+            rib_thickness = 1.0  # 1mm thick rib
+            rib_notch_depth = 2.0  # 2mm notch where rib passes through tube
+
+            if comp.bRepBodies.count == 0:
+                _log("Op 035: No body found", error=True)
+                return False
+
+            # Determine which dimension is 2 studs (the narrow dimension)
+            if studs_x == 2:
+                narrow_dim = studs_x
+                long_dim = studs_y
+                rib_runs_along = "y"  # Rib runs along Y axis (lengthwise)
+            elif studs_y == 2:
+                narrow_dim = studs_y
+                long_dim = studs_x
+                rib_runs_along = "x"  # Rib runs along X axis (lengthwise)
+            else:
+                _log("Op 035: Not a 2xN brick, skipping center rib")
+                return True
+
+            # Number of tubes = long_dim - 1 (for 2x4: 3 tubes)
+            num_tubes = long_dim - 1
+            if num_tubes < 1:
+                _log("Op 035: No tubes to add ribs through")
+                return True
+
+            # Determine which tubes get ribs (every other tube starting from #2)
+            # Tube indices: 1, 2, 3, ... (1-based)
+            # Ribs through: 2, 4, 6, ...
+            rib_tube_indices = [i for i in range(2, num_tubes + 1, 2)]  # 2, 4, 6, ...
+
+            if len(rib_tube_indices) == 0:
+                _log("Op 035: No tubes to add ribs through (too few tubes)")
+                return True
+
+            _log(f"Op 035: {num_tubes} tubes, adding ribs through tubes {rib_tube_indices}")
+
+            # Calculate rib dimensions
+            # Rib runs down the center, spanning from wall to wall across the 2-stud width
+            if rib_runs_along == "y":
+                # Rib runs along Y, centered on X
+                rib_center_x = narrow_dim * STUD_PITCH / 2  # Center X position (8mm for 2-wide)
+                rib_start_y = WALL_THICKNESS
+                rib_end_y = long_dim * STUD_PITCH - WALL_THICKNESS
+                rib_length = rib_end_y - rib_start_y
+            else:
+                # Rib runs along X, centered on Y
+                rib_center_y = narrow_dim * STUD_PITCH / 2
+                rib_start_x = WALL_THICKNESS
+                rib_end_x = long_dim * STUD_PITCH - WALL_THICKNESS
+                rib_length = rib_end_x - rib_start_x
+
+            # Rib height (from bottom to underside of top, with 2mm recess at bottom)
+            rib_height = height - TOP_THICKNESS - RIB_BOTTOM_RECESS
+
+            _log(f"Op 035: Creating center rib, length={rib_length:.1f}mm, height={rib_height:.1f}mm")
+
+            # Create the main rib body
+            sketch = comp.sketches.add(comp.xYConstructionPlane)
+            sketch.name = "Op035_CenterRib_Sketch"
+            lines = sketch.sketchCurves.sketchLines
+
+            if rib_runs_along == "y":
+                # Rib profile: rectangle centered on X, spanning Y
+                x1 = rib_center_x - rib_thickness / 2
+                x2 = rib_center_x + rib_thickness / 2
+                y1 = rib_start_y
+                y2 = rib_end_y
+            else:
+                # Rib profile: rectangle centered on Y, spanning X
+                x1 = rib_start_x
+                x2 = rib_end_x
+                y1 = rib_center_y - rib_thickness / 2
+                y2 = rib_center_y + rib_thickness / 2
+
+            lines.addTwoPointRectangle(
+                adsk.core.Point3D.create(self._cm(x1), self._cm(y1), 0),
+                adsk.core.Point3D.create(self._cm(x2), self._cm(y2), 0)
+            )
+
+            if sketch.profiles.count == 0:
+                _log("Op 035: No profile created for rib", error=True)
+                return False
+
+            # Extrude the rib from Z=RIB_BOTTOM_RECESS to Z=height-TOP_THICKNESS
+            extrudes = comp.features.extrudeFeatures
+
+            # Find the rib profile (should be the only one)
+            rib_profile = sketch.profiles.item(0)
+
+            ext_input = extrudes.createInput(
+                rib_profile,
+                adsk.fusion.FeatureOperations.JoinFeatureOperation
+            )
+            # Start extrusion at Z=RIB_BOTTOM_RECESS (2mm up from bottom)
+            start_offset = adsk.fusion.OffsetStartDefinition.create(
+                adsk.core.ValueInput.createByReal(self._cm(RIB_BOTTOM_RECESS))
+            )
+            ext_input.startExtent = start_offset
+            ext_input.setDistanceExtent(
+                False,
+                adsk.core.ValueInput.createByReal(self._cm(rib_height))
+            )
+            rib_feature = extrudes.add(ext_input)
+            rib_feature.name = "Op035_CenterRib"
+
+            _log(f"Op 035: Created center rib")
+
+            # Now create notches where the rib passes through tubes
+            # The notch is cut from the BOTTOM of the rib (at Z=RIB_BOTTOM_RECESS)
+            # going UP by 2mm. This creates clearance for the tube opening.
+            #
+            # Real LEGO cross-section at tube intersection:
+            #     ─────────────  <- top of brick interior
+            #     │           │
+            #     │    rib    │  <- rib continues up to top
+            #     │           │
+            #     │   ┌───┐   │  <- tube wall
+            #     │   │   │   │
+            #     ════╧═══╧════  <- notch cut here (bottom 2mm of rib removed)
+            #         2mm gap     <- rib starts 2mm up from brick bottom
+            #     ──────────────  <- bottom of brick (Z=0)
+            #
+            notch_height = rib_notch_depth  # 2mm notch depth
+            notch_z_start = RIB_BOTTOM_RECESS  # Start at bottom of rib (2mm up from brick bottom)
+
+            for tube_idx in rib_tube_indices:
+                # Tube position (center)
+                if rib_runs_along == "y":
+                    tube_center_y = tube_idx * STUD_PITCH
+                    # Notch is centered on tube, spans tube diameter
+                    notch_x1 = rib_center_x - rib_thickness / 2 - 0.1  # Slightly wider
+                    notch_x2 = rib_center_x + rib_thickness / 2 + 0.1
+                    notch_y1 = tube_center_y - TUBE_OD / 2
+                    notch_y2 = tube_center_y + TUBE_OD / 2
+                else:
+                    tube_center_x = tube_idx * STUD_PITCH
+                    notch_x1 = tube_center_x - TUBE_OD / 2
+                    notch_x2 = tube_center_x + TUBE_OD / 2
+                    notch_y1 = rib_center_y - rib_thickness / 2 - 0.1
+                    notch_y2 = rib_center_y + rib_thickness / 2 + 0.1
+
+                # Create sketch for notch at the bottom of the rib
+                planes = comp.constructionPlanes
+                plane_input = planes.createInput()
+                plane_input.setByOffset(
+                    comp.xYConstructionPlane,
+                    adsk.core.ValueInput.createByReal(self._cm(notch_z_start))
+                )
+                notch_plane = planes.add(plane_input)
+                notch_plane.name = f"Op035_NotchPlane_{tube_idx}"
+
+                notch_sketch = comp.sketches.add(notch_plane)
+                notch_sketch.name = f"Op035_Notch_{tube_idx}_Sketch"
+
+                notch_sketch.sketchCurves.sketchLines.addTwoPointRectangle(
+                    adsk.core.Point3D.create(self._cm(notch_x1), self._cm(notch_y1), 0),
+                    adsk.core.Point3D.create(self._cm(notch_x2), self._cm(notch_y2), 0)
+                )
+
+                if notch_sketch.profiles.count > 0:
+                    notch_profile = notch_sketch.profiles.item(0)
+                    cut_input = extrudes.createInput(
+                        notch_profile,
+                        adsk.fusion.FeatureOperations.CutFeatureOperation
+                    )
+                    # Cut upward from the bottom of the rib
+                    cut_input.setDistanceExtent(
+                        False,
+                        adsk.core.ValueInput.createByReal(self._cm(notch_height))
+                    )
+                    cut_feature = extrudes.add(cut_input)
+                    cut_feature.name = f"Op035_Notch_{tube_idx}"
+                    _log(f"Op 035: Created notch at tube {tube_idx} (bottom 2mm of rib)")
+
+            _log(f"Op 035 SUCCESS: Created center rib with {len(rib_tube_indices)} notches")
+            return True
+
+        except Exception as e:
+            _log(f"Op 035 Exception: {e}", error=True)
+            _log(traceback.format_exc(), error=True)
+            return False
+
+    def _op_036_add_cross_ribs(
+        self,
+        comp: adsk.fusion.Component,
+        studs_x: int,
+        studs_y: int,
+        height: float
+    ) -> bool:
+        """
+        Op 036: Add cross-ribs for larger bricks (3x3, 4x4, 4x6, etc.).
+
+        Type: JoinFeatureOperation
+        Input: Hollowed shell with tubes
+        Output: Shell with cross-ribs connecting tubes
+
+        For bricks 3x3 and larger, there's a grid of tubes underneath.
+        Cross-ribs run between the tubes in both X and Y directions,
+        forming a grid pattern that strengthens the brick.
+
+        Real LEGO 4x4 underside (top view):
+            ════════════════════════════════════
+            ║                                  ║
+            ║    ○────○────○                   ║  <- 3x3 grid of tubes
+            ║    │    │    │                   ║     connected by ribs
+            ║    ○────○────○                   ║
+            ║    │    │    │                   ║
+            ║    ○────○────○                   ║
+            ║                                  ║
+            ════════════════════════════════════
+
+        Ribs are recessed 2mm from the bottom of the brick.
+        """
+        try:
+            rib_thickness = RIB_THICKNESS  # 1mm
+
+            if comp.bRepBodies.count == 0:
+                _log("Op 036: No body found", error=True)
+                return False
+
+            # Number of tubes in each direction
+            tubes_x = studs_x - 1  # e.g., 4x4 has 3 tubes in X
+            tubes_y = studs_y - 1  # e.g., 4x4 has 3 tubes in Y
+
+            if tubes_x < 2 or tubes_y < 2:
+                _log(f"Op 036: Not enough tubes for cross-ribs ({tubes_x}x{tubes_y})")
+                return True
+
+            # Rib height (from 2mm recess to underside of top)
+            rib_height = height - TOP_THICKNESS - RIB_BOTTOM_RECESS
+
+            _log(f"Op 036: Creating cross-ribs for {studs_x}x{studs_y} brick")
+            _log(f"Op 036: Tube grid is {tubes_x}x{tubes_y}, rib height={rib_height:.1f}mm")
+
+            extrudes = comp.features.extrudeFeatures
+            ribs_created = 0
+
+            # Create ribs running in X direction (connecting tubes horizontally)
+            # For each row of tubes, create ribs between adjacent tubes
+            for row in range(tubes_y):
+                tube_y = (row + 1) * STUD_PITCH  # Y position of this row of tubes
+
+                for col in range(tubes_x - 1):
+                    # Rib from tube at (col, row) to tube at (col+1, row)
+                    tube_x1 = (col + 1) * STUD_PITCH
+                    tube_x2 = (col + 2) * STUD_PITCH
+
+                    # Rib starts at edge of first tube, ends at edge of second tube
+                    rib_x1 = tube_x1 + TUBE_OD / 2
+                    rib_x2 = tube_x2 - TUBE_OD / 2
+                    rib_y1 = tube_y - rib_thickness / 2
+                    rib_y2 = tube_y + rib_thickness / 2
+
+                    # Skip if rib would be too short
+                    if rib_x2 - rib_x1 < 0.5:
+                        continue
+
+                    # Create sketch on XY plane
+                    sketch = comp.sketches.add(comp.xYConstructionPlane)
+                    sketch.name = f"Op036_RibX_{row}_{col}_Sketch"
+
+                    sketch.sketchCurves.sketchLines.addTwoPointRectangle(
+                        adsk.core.Point3D.create(self._cm(rib_x1), self._cm(rib_y1), 0),
+                        adsk.core.Point3D.create(self._cm(rib_x2), self._cm(rib_y2), 0)
+                    )
+
+                    if sketch.profiles.count > 0:
+                        profile = sketch.profiles.item(0)
+                        ext_input = extrudes.createInput(
+                            profile,
+                            adsk.fusion.FeatureOperations.JoinFeatureOperation
+                        )
+                        # Start at 2mm recess
+                        start_offset = adsk.fusion.OffsetStartDefinition.create(
+                            adsk.core.ValueInput.createByReal(self._cm(RIB_BOTTOM_RECESS))
+                        )
+                        ext_input.startExtent = start_offset
+                        ext_input.setDistanceExtent(
+                            False,
+                            adsk.core.ValueInput.createByReal(self._cm(rib_height))
+                        )
+                        rib_feature = extrudes.add(ext_input)
+                        rib_feature.name = f"Op036_RibX_{row}_{col}"
+                        ribs_created += 1
+
+            # Create ribs running in Y direction (connecting tubes vertically)
+            for col in range(tubes_x):
+                tube_x = (col + 1) * STUD_PITCH  # X position of this column of tubes
+
+                for row in range(tubes_y - 1):
+                    # Rib from tube at (col, row) to tube at (col, row+1)
+                    tube_y1 = (row + 1) * STUD_PITCH
+                    tube_y2 = (row + 2) * STUD_PITCH
+
+                    # Rib starts at edge of first tube, ends at edge of second tube
+                    rib_x1 = tube_x - rib_thickness / 2
+                    rib_x2 = tube_x + rib_thickness / 2
+                    rib_y1 = tube_y1 + TUBE_OD / 2
+                    rib_y2 = tube_y2 - TUBE_OD / 2
+
+                    # Skip if rib would be too short
+                    if rib_y2 - rib_y1 < 0.5:
+                        continue
+
+                    # Create sketch on XY plane
+                    sketch = comp.sketches.add(comp.xYConstructionPlane)
+                    sketch.name = f"Op036_RibY_{row}_{col}_Sketch"
+
+                    sketch.sketchCurves.sketchLines.addTwoPointRectangle(
+                        adsk.core.Point3D.create(self._cm(rib_x1), self._cm(rib_y1), 0),
+                        adsk.core.Point3D.create(self._cm(rib_x2), self._cm(rib_y2), 0)
+                    )
+
+                    if sketch.profiles.count > 0:
+                        profile = sketch.profiles.item(0)
+                        ext_input = extrudes.createInput(
+                            profile,
+                            adsk.fusion.FeatureOperations.JoinFeatureOperation
+                        )
+                        # Start at 2mm recess
+                        start_offset = adsk.fusion.OffsetStartDefinition.create(
+                            adsk.core.ValueInput.createByReal(self._cm(RIB_BOTTOM_RECESS))
+                        )
+                        ext_input.startExtent = start_offset
+                        ext_input.setDistanceExtent(
+                            False,
+                            adsk.core.ValueInput.createByReal(self._cm(rib_height))
+                        )
+                        rib_feature = extrudes.add(ext_input)
+                        rib_feature.name = f"Op036_RibY_{row}_{col}"
+                        ribs_created += 1
+
+            _log(f"Op 036 SUCCESS: Created {ribs_created} cross-ribs")
+            return True
+
+        except Exception as e:
+            _log(f"Op 036 Exception: {e}", error=True)
             _log(traceback.format_exc(), error=True)
             return False
 
@@ -2954,55 +4091,81 @@ class BrickModeler:
     ) -> Dict[str, Any]:
         """
         Export a component as STL file.
-        
+
         Args:
             component_name: Name of component to export
             output_path: Full path for output STL file
             resolution: "low", "medium", "high"
-            
+
         Returns:
             Dict with path, size, triangle count
         """
-        # Find component
-        comp = None
-        for occ in self.root.occurrences:
-            if occ.component.name == component_name:
-                comp = occ.component
-                break
-        
-        if not comp:
-            raise Exception(f"Component not found: {component_name}")
-        
-        # Set up export
-        export_mgr = self.design.exportManager
-        
-        # STL export options
-        stl_options = export_mgr.createSTLExportOptions(comp)
-        stl_options.filename = output_path
-        
-        # Resolution settings
-        if resolution == "low":
-            stl_options.meshRefinement = adsk.fusion.MeshRefinementSettings.MeshRefinementLow
-        elif resolution == "medium":
-            stl_options.meshRefinement = adsk.fusion.MeshRefinementSettings.MeshRefinementMedium
-        else:
-            stl_options.meshRefinement = adsk.fusion.MeshRefinementSettings.MeshRefinementHigh
-        
-        # Export
-        export_mgr.execute(stl_options)
-        
-        # Get file info
         import os
-        file_size = os.path.getsize(output_path) / 1024  # KB
-        
-        # Estimate triangle count (rough approximation)
-        triangle_count = int(file_size * 15)  # ~15 triangles per KB for STL
-        
-        return {
-            "path": output_path,
-            "size_kb": file_size,
-            "triangle_count": triangle_count
-        }
+        import traceback
+
+        # Find component - check both occurrences and root
+        comp = None
+
+        # First check if it's the root component
+        if self.root.name == component_name:
+            comp = self.root
+        else:
+            # Check occurrences
+            for occ in self.root.occurrences:
+                if occ.component.name == component_name:
+                    comp = occ.component
+                    break
+
+        if not comp:
+            available = [self.root.name] + [occ.component.name for occ in self.root.occurrences]
+            raise Exception(f"Component not found: {component_name}. Available: {available}")
+
+        # Ensure output directory exists
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        try:
+            # Set up export
+            export_mgr = self.design.exportManager
+
+            # STL export options
+            stl_options = export_mgr.createSTLExportOptions(comp)
+            stl_options.filename = output_path
+
+            # Resolution settings
+            if resolution == "low":
+                stl_options.meshRefinement = adsk.fusion.MeshRefinementSettings.MeshRefinementLow
+            elif resolution == "medium":
+                stl_options.meshRefinement = adsk.fusion.MeshRefinementSettings.MeshRefinementMedium
+            else:
+                stl_options.meshRefinement = adsk.fusion.MeshRefinementSettings.MeshRefinementHigh
+
+            # Export with error checking
+            result = export_mgr.execute(stl_options)
+
+            if not result:
+                raise Exception("Export failed - Fusion 360 returned False")
+
+            # Verify file was created
+            if not os.path.exists(output_path):
+                raise Exception(f"Export completed but file not found at: {output_path}")
+
+            # Get file info
+            file_size = os.path.getsize(output_path) / 1024  # KB
+
+            # Estimate triangle count (rough approximation)
+            triangle_count = int(file_size * 15)  # ~15 triangles per KB for STL
+
+            return {
+                "path": output_path,
+                "size_kb": file_size,
+                "triangle_count": triangle_count
+            }
+
+        except Exception as e:
+            error_msg = f"STL export failed: {str(e)}\n{traceback.format_exc()}"
+            raise Exception(error_msg)
     
     def get_component_by_name(self, name: str) -> Optional[adsk.fusion.Component]:
         """Find a component by name."""

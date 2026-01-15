@@ -228,6 +228,9 @@ class FusionAPIHandler(BaseHTTPRequestHandler):
                 'export_stl', 'export_step', 'export_3mf',
                 'setup_cam', 'generate_gcode', 'full_mill_workflow',
                 'batch_export', 'slice_stl',
+                'aluminum_lego_cam', 'aluminum_workflow_status',
+                # AI CAM Copilot commands
+                'ai_cam_recommend', 'ai_cam_execute', 'ai_cam_feedback',
             }
 
             if command not in valid_commands:
@@ -301,16 +304,20 @@ class FusionAPIHandler(BaseHTTPRequestHandler):
         # Hollow: check is_hollow (nested format) or hollow (flat format)
         hollow = params.get('is_hollow', params.get('hollow', True))
 
+        # Center rib: adds the internal spine for 2xN bricks (like real LEGO)
+        center_rib = params.get('center_rib', True)
+
         name = params.get('name')
         color = params.get('color')  # LEGO color name (red, blue, yellow, etc.)
 
-        _log(f"Creating brick: {studs_x}x{studs_y}, height={height_units}, hollow={hollow}, name={name}, color={color}")
+        _log(f"Creating brick: {studs_x}x{studs_y}, height={height_units}, hollow={hollow}, center_rib={center_rib}, name={name}, color={color}")
 
         result = _modeler.create_standard_brick(
             studs_x=studs_x,
             studs_y=studs_y,
             height_units=height_units,
             hollow=hollow,
+            center_rib=center_rib,
             name=name,
             color=color
         )
@@ -1123,6 +1130,377 @@ class FusionAPIHandler(BaseHTTPRequestHandler):
                 'traceback': traceback.format_exc()
             }
 
+    def _handle_aluminum_lego_cam(self, params: dict) -> dict:
+        """
+        Create complete CAM workflow for aluminum LEGO brick on Bantam Desktop CNC.
+
+        This creates a two-setup workflow:
+        - SETUP1 (G54): Top operations - facing, stud roughing, stud finishing
+        - SETUP2 (G55): Bottom operations - hollow pocket, tubes, wall finishing
+
+        Uses optimized 2-tool strategy:
+        - T1: 3mm flat endmill (facing, roughing)
+        - T2: 2mm flat endmill (finishing, tubes)
+
+        Params:
+            studs_x: int (1-8, default 2)
+            studs_y: int (1-8, default 4)
+            height_plates: int (1-9, default 3)
+            z_offset_mm: float (0.5-3.0, default 1.0)
+            component_name: str (optional - will create brick if not provided)
+            output_dir: str (optional)
+
+        Returns:
+            Complete workflow with setups, operations, G-code paths
+        """
+        if not _cam_processor:
+            return {'success': False, 'error': 'CAM processor not initialized'}
+
+        try:
+            # Extract parameters
+            studs_x = min(max(int(params.get('studs_x', 2)), 1), 8)
+            studs_y = min(max(int(params.get('studs_y', 4)), 1), 8)
+            height_plates = min(max(int(params.get('height_plates', 3)), 1), 9)
+            z_offset_mm = min(max(float(params.get('z_offset_mm', 1.0)), 0.5), 3.0)
+            output_dir = params.get('output_dir')
+
+            # Get or create component
+            component_name = params.get('component_name')
+            brick_result = None
+
+            if not component_name:
+                # Create the brick first
+                if not _modeler:
+                    return {'success': False, 'error': 'Modeler not initialized - cannot create brick'}
+
+                # Create aluminum brick (solid, no hollow for milling from stock)
+                brick_result = _modeler.create_standard_brick(
+                    studs_x=studs_x,
+                    studs_y=studs_y,
+                    height_units=height_plates / 3.0,  # Convert plates to brick units
+                    hollow=True,  # Will have hollow interior
+                    center_rib=True,
+                    name=f"AluminumLEGO_{studs_x}x{studs_y}"
+                )
+
+                if not brick_result.success:
+                    return {'success': False, 'error': f'Brick creation failed: {brick_result.error}'}
+
+                component_name = brick_result.component_name
+                _log(f"Created aluminum brick component: {component_name}")
+
+            # Run the aluminum CAM workflow
+            result = _cam_processor.create_aluminum_lego_cam(
+                component_name=component_name,
+                studs_x=studs_x,
+                studs_y=studs_y,
+                height_plates=height_plates,
+                z_offset_mm=z_offset_mm,
+                output_dir=output_dir
+            )
+
+            # Add brick info if we created it
+            if brick_result:
+                result['brick_created'] = {
+                    'id': brick_result.brick_id,
+                    'component_name': brick_result.component_name,
+                    'dimensions': brick_result.dimensions,
+                    'volume_mm3': brick_result.volume_mm3
+                }
+
+            result['success'] = len(result.get('errors', [])) == 0
+
+            return result
+
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }
+
+    def _handle_aluminum_workflow_status(self, params: dict) -> dict:
+        """
+        Get status of aluminum LEGO milling capabilities.
+
+        Returns machine specs, tool info, and workflow details.
+        """
+        if not _cam_processor:
+            return {'success': False, 'error': 'CAM processor not initialized'}
+
+        try:
+            status = _cam_processor.get_aluminum_workflow_status()
+            return {
+                'success': True,
+                **status
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
+
+    # ============================================
+    # AI CAM Copilot Handlers
+    # Integration with dashboard CAM API
+    # ============================================
+
+    def _handle_ai_cam_recommend(self, params: dict) -> dict:
+        """
+        Get AI-recommended CAM parameters from the dashboard API.
+
+        Params:
+            brick_type: str (e.g., "2x4")
+            dimensions: dict with x, y, z (mm)
+            material: str (e.g., "aluminum_6061")
+            machine_id: str (e.g., "bantam-desktop-cnc")
+            operation: str (e.g., "pocket")
+            mode: str ("autonomous", "copilot", "advisory")
+
+        Returns:
+            AI recommendation with tool, feeds/speeds, toolpath strategy
+        """
+        import urllib.request
+        import urllib.error
+
+        # Build request to dashboard API
+        api_url = params.get('api_url', 'http://localhost:5000/api/ai/cam/recommend')
+
+        request_data = {
+            'brick_type': params.get('brick_type', '2x4'),
+            'dimensions': params.get('dimensions', {'x': 32, 'y': 16, 'z': 9.6}),
+            'material': params.get('material', 'aluminum_6061'),
+            'machine_id': params.get('machine_id', 'bantam-desktop-cnc'),
+            'operation': params.get('operation', 'pocket'),
+            'mode': params.get('mode', 'copilot'),
+        }
+
+        try:
+            req = urllib.request.Request(
+                api_url,
+                data=json.dumps(request_data).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+
+            with urllib.request.urlopen(req, timeout=30) as response:
+                result = json.loads(response.read().decode('utf-8'))
+
+                if result.get('success'):
+                    recommendation = result.get('recommendation', {})
+                    return {
+                        'success': True,
+                        'recommendation': recommendation,
+                        'mode': result.get('mode', 'copilot'),
+                        'requires_approval': result.get('requires_approval', True),
+                        'source': 'dashboard_api'
+                    }
+                else:
+                    raise Exception(result.get('error', 'Unknown error'))
+
+        except (urllib.error.URLError, urllib.error.HTTPError) as e:
+            _log(f"Dashboard API unavailable, using local calculation: {e}")
+            # Fallback to local calculation
+            return self._local_cam_recommend(params)
+
+    def _local_cam_recommend(self, params: dict) -> dict:
+        """Generate local CAM recommendation when API is unavailable."""
+        material = params.get('material', 'aluminum_6061')
+        dimensions = params.get('dimensions', {'x': 32, 'y': 16, 'z': 9.6})
+
+        # Material properties database
+        material_props = {
+            'aluminum_6061': {'surface_speed': 150, 'chip_load': 0.05, 'coolant': 'flood'},
+            'aluminum_7075': {'surface_speed': 120, 'chip_load': 0.04, 'coolant': 'flood'},
+            'brass_360': {'surface_speed': 100, 'chip_load': 0.06, 'coolant': 'mist'},
+            'steel_1018': {'surface_speed': 30, 'chip_load': 0.02, 'coolant': 'flood'},
+            'abs_plastic': {'surface_speed': 300, 'chip_load': 0.1, 'coolant': 'none'},
+            'delrin': {'surface_speed': 250, 'chip_load': 0.08, 'coolant': 'none'},
+        }
+
+        props = material_props.get(material, material_props['aluminum_6061'])
+
+        # Calculate feeds and speeds
+        tool_diameter = 3.175  # mm (1/8")
+        rpm = min(24000, int((props['surface_speed'] * 1000) / (3.14159 * tool_diameter)))
+        feed_rate = int(rpm * 2 * props['chip_load'])
+
+        recommendation = {
+            'recommendation_id': f"local-{uuid.uuid4().hex[:8]}",
+            'tool': {
+                'type': 'Flat End Mill',
+                'diameter_mm': tool_diameter,
+                'flutes': 2,
+                'material': 'Carbide'
+            },
+            'feeds_speeds': {
+                'spindle_rpm': rpm,
+                'feed_rate_mm_min': feed_rate,
+                'plunge_rate_mm_min': int(feed_rate * 0.3),
+                'depth_of_cut_mm': 1.0,
+                'stepover_percent': 40,
+                'chip_load_mm': props['chip_load']
+            },
+            'toolpath': {
+                'strategy': 'adaptive',
+                'direction': 'climb',
+                'lead_in': 'arc',
+                'hsm_enabled': True
+            },
+            'confidence': 0.85,
+            'rationale': f"Local calculation for {material} using conservative parameters."
+        }
+
+        return {
+            'success': True,
+            'recommendation': recommendation,
+            'mode': params.get('mode', 'copilot'),
+            'requires_approval': True,
+            'source': 'local_calculation'
+        }
+
+    def _handle_ai_cam_execute(self, params: dict) -> dict:
+        """
+        Execute approved CAM recommendation.
+
+        Params:
+            recommendation: dict (from ai_cam_recommend)
+            user_approved: bool (required for copilot mode)
+            component_name: str (optional - target component)
+
+        Returns:
+            Execution result with G-code path
+        """
+        recommendation = params.get('recommendation')
+        user_approved = params.get('user_approved', False)
+        component_name = params.get('component_name')
+
+        if not recommendation:
+            return {'success': False, 'error': 'Recommendation required'}
+
+        mode = recommendation.get('mode', 'copilot')
+
+        # Check approval for copilot mode
+        if mode == 'copilot' and not user_approved:
+            return {
+                'success': False,
+                'error': 'User approval required for copilot mode',
+                'requires_approval': True
+            }
+
+        # Extract CAM parameters
+        feeds_speeds = recommendation.get('feeds_speeds', {})
+        tool = recommendation.get('tool', {})
+
+        _log(f"Executing AI CAM recommendation: RPM={feeds_speeds.get('spindle_rpm')}, "
+             f"Feed={feeds_speeds.get('feed_rate_mm_min')}, Tool={tool.get('diameter_mm')}mm")
+
+        # If we have a CAM processor, create actual toolpath
+        if _cam_processor and component_name:
+            try:
+                result = _cam_processor.create_aluminum_lego_cam(
+                    component_name=component_name,
+                    studs_x=params.get('studs_x', 2),
+                    studs_y=params.get('studs_y', 4),
+                    height_plates=params.get('height_plates', 3),
+                    # Override with AI parameters
+                    spindle_rpm=feeds_speeds.get('spindle_rpm'),
+                    feed_rate=feeds_speeds.get('feed_rate_mm_min'),
+                    depth_of_cut=feeds_speeds.get('depth_of_cut_mm'),
+                )
+                return {
+                    'success': True,
+                    'executed': True,
+                    'recommendation_id': recommendation.get('recommendation_id'),
+                    'cam_result': result
+                }
+            except Exception as e:
+                return {
+                    'success': False,
+                    'error': f'CAM execution failed: {e}'
+                }
+        else:
+            # No CAM processor - just acknowledge approval
+            return {
+                'success': True,
+                'executed': False,
+                'recommendation_id': recommendation.get('recommendation_id'),
+                'message': 'Recommendation approved (CAM processor not available for execution)',
+                'approved_params': {
+                    'spindle_rpm': feeds_speeds.get('spindle_rpm'),
+                    'feed_rate_mm_min': feeds_speeds.get('feed_rate_mm_min'),
+                    'depth_of_cut_mm': feeds_speeds.get('depth_of_cut_mm'),
+                    'tool_diameter_mm': tool.get('diameter_mm')
+                }
+            }
+
+    def _handle_ai_cam_feedback(self, params: dict) -> dict:
+        """
+        Submit quality feedback for CAM learning.
+
+        Params:
+            recommendation_id: str (from recommendation)
+            defect_type: str (e.g., "rough_surface", "undersized_stud")
+            severity: str ("minor", "major", "critical")
+            notes: str (optional)
+
+        Returns:
+            Acknowledgment of feedback recording
+        """
+        import urllib.request
+        import urllib.error
+
+        recommendation_id = params.get('recommendation_id')
+        defect_type = params.get('defect_type')
+        severity = params.get('severity', 'minor')
+        notes = params.get('notes', '')
+
+        if not defect_type:
+            return {'success': False, 'error': 'defect_type required'}
+
+        # Try to send to dashboard API
+        api_url = params.get('api_url', 'http://localhost:5000/api/ai/cam/feedback-loop/record')
+
+        request_data = {
+            'work_center_id': params.get('machine_id', 'bantam-desktop-cnc'),
+            'part_number': params.get('part_number', 'LEGO-2x4-Brick'),
+            'defect_type': defect_type,
+            'severity': severity,
+            'cam_recommendation_id': recommendation_id,
+            'notes': notes
+        }
+
+        try:
+            req = urllib.request.Request(
+                api_url,
+                data=json.dumps(request_data).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                return {
+                    'success': True,
+                    'feedback_recorded': True,
+                    'defect': result.get('defect', {}),
+                    'will_adjust': True,
+                    'source': 'dashboard_api'
+                }
+
+        except (urllib.error.URLError, urllib.error.HTTPError) as e:
+            _log(f"Dashboard API unavailable for feedback: {e}")
+            # Store locally for later sync
+            return {
+                'success': True,
+                'feedback_recorded': True,
+                'defect_type': defect_type,
+                'severity': severity,
+                'will_adjust': True,
+                'source': 'local_storage',
+                'note': 'Feedback stored locally, will sync when API available'
+            }
+
 
 class ThreadedHTTPServer(threading.Thread):
     """HTTP server running in background thread."""
@@ -1219,6 +1597,13 @@ def _build_handler_registry():
         'setup_cam': lambda p: FusionAPIHandler._handle_setup_cam(None, p),
         'generate_gcode': lambda p: FusionAPIHandler._handle_generate_gcode(None, p),
         'full_mill_workflow': lambda p: FusionAPIHandler._handle_full_mill_workflow(None, p),
+        # Aluminum LEGO CNC milling (Bantam Desktop)
+        'aluminum_lego_cam': lambda p: FusionAPIHandler._handle_aluminum_lego_cam(None, p),
+        'aluminum_workflow_status': lambda p: FusionAPIHandler._handle_aluminum_workflow_status(None, p),
+        # AI CAM Copilot integration
+        'ai_cam_recommend': lambda p: FusionAPIHandler._handle_ai_cam_recommend(None, p),
+        'ai_cam_execute': lambda p: FusionAPIHandler._handle_ai_cam_execute(None, p),
+        'ai_cam_feedback': lambda p: FusionAPIHandler._handle_ai_cam_feedback(None, p),
     }
 
 

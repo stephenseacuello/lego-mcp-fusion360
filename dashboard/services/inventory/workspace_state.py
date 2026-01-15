@@ -48,9 +48,9 @@ class WorkspaceBrick:
 class WorkspaceConfig:
     """Workspace calibration and settings."""
 
-    # Baseplate dimensions (in studs)
-    width_studs: int = 32
-    height_studs: int = 32
+    # Baseplate dimensions (in studs) - 16x32 grey baseplate
+    width_studs: int = 32  # Long side (columns A-P repeated twice or A-AF)
+    height_studs: int = 16  # Short side (rows 1-16)
 
     # Camera frame dimensions
     frame_width: int = 1280
@@ -67,7 +67,8 @@ class WorkspaceConfig:
     stability_time_s: float = 0.5  # Seconds without movement to be "stable"
 
     # Detection settings
-    min_confidence: float = 0.5
+    # Note: Set very low for Roboflow models that return low confidence on real photos
+    min_confidence: float = 0.001
     iou_threshold: float = 0.5  # For matching detections across frames
 
 

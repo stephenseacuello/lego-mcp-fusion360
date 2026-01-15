@@ -2,6 +2,7 @@
 API Routes
 
 REST API endpoints for AJAX calls.
+LEGO MCP v5.0 World-Class Manufacturing Platform
 """
 
 from flask import Blueprint, request, jsonify
@@ -12,6 +13,44 @@ from services.status_service import StatusService
 from services.mcp_bridge import MCPBridge
 
 api_bp = Blueprint("api", __name__)
+
+
+# =============================================================================
+# HEALTH CHECK API
+# =============================================================================
+
+
+@api_bp.route("/health")
+def api_health():
+    """
+    API health check endpoint.
+
+    Returns the health status of the dashboard and connected services.
+    """
+    status = StatusService.get_all_status(use_cache=True)
+
+    # Determine overall health
+    fusion360_ok = status.get("fusion360", {}).get("status") == "connected"
+    slicer_ok = status.get("slicer", {}).get("status") == "connected"
+
+    overall_status = "ok" if (fusion360_ok or slicer_ok) else "degraded"
+
+    return jsonify({
+        "status": overall_status,
+        "version": "5.0.0",
+        "platform": "LegoMCP World-Class CPPS",
+        "services": {
+            "fusion360": "connected" if fusion360_ok else "disconnected",
+            "slicer": "connected" if slicer_ok else "disconnected",
+        },
+        "modules": {
+            "manufacturing": True,
+            "quality": True,
+            "erp": True,
+            "mrp": True,
+            "digital_twin": True,
+        }
+    })
 
 
 # =============================================================================

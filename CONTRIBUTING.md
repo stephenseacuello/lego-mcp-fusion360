@@ -1,8 +1,32 @@
-# Contributing to LEGO MCP Studio
+# Contributing to LEGO MCP v8.0
 
-Thank you for your interest in contributing! This guide will help you get started.
+Thank you for your interest in contributing to LEGO MCP v8.0, a DoD/ONR-class manufacturing system. This document provides comprehensive guidelines for contributing.
 
-## 🚀 Quick Start for Contributors
+**Version:** 8.0.0 | **Classification:** UNCLASSIFIED
+
+## Table of Contents
+
+- [Code of Conduct](#code-of-conduct)
+- [Security Considerations](#security-considerations)
+- [Quick Start](#-quick-start-for-contributors)
+- [Development Setup](#development-setup)
+- [Testing Requirements](#testing-requirements)
+- [Documentation](#documentation)
+
+## Code of Conduct
+
+This project adheres to a Code of Conduct. By participating, you are expected to uphold this code. Please report unacceptable behavior to conduct@lego-mcp.io.
+
+## Security Considerations
+
+**IMPORTANT:** Before contributing, review [SECURITY.md](./SECURITY.md).
+
+- Never commit secrets, API keys, or credentials
+- Run `pip-audit` before submitting PRs
+- Security-sensitive changes require additional review
+- Report vulnerabilities to security@lego-mcp.io
+
+## Quick Start for Contributors
 
 ```bash
 # Fork and clone

@@ -1,19 +1,20 @@
-# CuraEngine Slicer Service for LEGO MCP
+# PrusaSlicer Service for LEGO MCP
 # Provides HTTP API for slicing STL files to G-code
-# Uses CuraEngine which has ARM64 support (works on Apple Silicon)
+# Uses PrusaSlicer CLI which has excellent command-line support
 
 FROM python:3.11-slim
 
 LABEL maintainer="LegoMCP Project"
-LABEL description="CuraEngine CLI service for 3D print G-code generation"
+LABEL description="PrusaSlicer CLI service for 3D print G-code generation"
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies and CuraEngine
+# Install dependencies and PrusaSlicer
+# Note: prusa-slicer pulls in many dependencies but works well for CLI slicing
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    cura-engine \
+    prusa-slicer \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -24,7 +25,7 @@ RUN pip install --no-cache-dir \
     python-multipart
 
 # Create directories
-RUN mkdir -p /app/profiles /output/gcode/3dprint
+RUN mkdir -p /app/profiles /output/gcode/3dprint /tmp/slicer
 
 # Copy application files
 COPY src/ /app/

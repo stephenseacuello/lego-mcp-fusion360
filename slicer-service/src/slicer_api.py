@@ -1,7 +1,7 @@
 """
-CuraEngine HTTP API Service
+PrusaSlicer HTTP API Service
 
-Provides a REST API for slicing STL files using CuraEngine CLI.
+Provides a REST API for slicing STL files using PrusaSlicer CLI.
 Optimized for LEGO brick printing with appropriate profiles.
 Works on both x64 and ARM64 (Apple Silicon).
 """
@@ -21,12 +21,14 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="LEGO Slicer Service",
-    description="CuraEngine-based G-code generation for LEGO bricks",
-    version="1.0.0",
+    description="PrusaSlicer-based G-code generation for LEGO bricks",
+    version="2.0.0",
 )
 
 # Directories
-PROFILES_DIR = Path("/app/profiles")
+TEMP_DIR = Path("/tmp/slicer")
+TEMP_DIR.mkdir(parents=True, exist_ok=True)
+PROFILES_SOURCE_DIR = Path("/app/profiles_source")  # Read-only source profiles
 OUTPUT_DIR = Path("/output/gcode/3dprint")
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -75,6 +77,8 @@ QUALITY_PRESETS = {
     "normal": {"layer_height": 0.20, "wall_count": 3, "top_layers": 4, "bottom_layers": 3},
     "fine": {"layer_height": 0.15, "wall_count": 3, "top_layers": 5, "bottom_layers": 4},
     "ultra": {"layer_height": 0.10, "wall_count": 4, "top_layers": 6, "bottom_layers": 5},
+    # LEGO-optimized preset
+    "lego": {"layer_height": 0.12, "wall_count": 3, "top_layers": 5, "bottom_layers": 4},
 }
 
 # Material-specific settings
@@ -89,96 +93,151 @@ MATERIAL_SETTINGS = {
 # === Helper Functions ===
 
 
-def is_curaengine_available() -> bool:
-    """Check if CuraEngine CLI is available."""
+def is_prusaslicer_available() -> bool:
+    """Check if PrusaSlicer CLI is available."""
     try:
         result = subprocess.run(
-            ["CuraEngine", "--help"], capture_output=True, text=True, timeout=10
+            ["prusa-slicer", "--help"], capture_output=True, text=True, timeout=10
         )
-        # CuraEngine --help returns 0, but --version may return different codes
-        # Check if we got any output indicating it exists
-        return result.returncode == 0 or "Cura" in result.stdout or "Cura" in result.stderr
+        # --help returns exit code 0 and contains "PrusaSlicer"
+        return "PrusaSlicer" in result.stdout or "PrusaSlicer" in result.stderr
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         return False
 
 
-def get_curaengine_version() -> str:
-    """Get CuraEngine version."""
+def get_prusaslicer_version() -> str:
+    """Get PrusaSlicer version."""
     try:
         result = subprocess.run(
-            ["CuraEngine", "--version"], capture_output=True, text=True, timeout=10
+            ["prusa-slicer", "--help"], capture_output=True, text=True, timeout=10
         )
-        if result.returncode == 0:
-            return result.stdout.strip() or result.stderr.strip()
+        # Parse version from output like "PrusaSlicer-2.9.2+..."
+        combined = result.stdout + result.stderr
+        version_match = re.search(r"PrusaSlicer[- ]*([\d.]+)", combined)
+        if version_match:
+            return version_match.group(1)
     except Exception:
         pass
     return "unknown"
 
 
-def create_cura_config(quality: dict, material: dict, infill: int) -> Path:
-    """Create a CuraEngine JSON config for LEGO brick printing."""
-    config = {
-        # Layer settings
-        "layer_height": quality["layer_height"],
-        "layer_height_0": quality["layer_height"] * 1.2,  # Slightly thicker first layer
+def load_printer_profile(printer: str) -> dict:
+    """Load printer-specific settings from profile JSON files."""
+    profiles_dir = PROFILES_SOURCE_DIR if PROFILES_SOURCE_DIR.exists() else Path("/app/profiles")
 
-        # Wall settings
-        "wall_line_count": quality["wall_count"],
-        "wall_thickness": quality["wall_count"] * 0.4,  # 0.4mm nozzle
+    # Try to load printer-specific profile
+    profile_files = [
+        profiles_dir / f"{printer}.json",
+        profiles_dir / f"lego_{printer}.json",
+    ]
 
-        # Top/bottom
-        "top_layers": quality["top_layers"],
-        "bottom_layers": quality["bottom_layers"],
-        "top_thickness": quality["top_layers"] * quality["layer_height"],
-        "bottom_thickness": quality["bottom_layers"] * quality["layer_height"],
+    for profile_path in profile_files:
+        if profile_path.exists():
+            try:
+                with open(profile_path) as f:
+                    return json.load(f)
+            except Exception as e:
+                logger.warning(f"Failed to load profile {profile_path}: {e}")
 
-        # Infill
-        "infill_sparse_density": infill,
-        "infill_pattern": "grid",
+    # Return empty dict if no profile found
+    return {}
 
-        # Temperature
-        "material_print_temperature": material["temp_extruder"],
-        "material_print_temperature_layer_0": material["temp_extruder"] + 5,
-        "material_bed_temperature": material["temp_bed"],
-        "material_bed_temperature_layer_0": material["temp_bed"] + 5,
 
-        # Fan
-        "cool_fan_speed": material["fan_speed"],
-        "cool_fan_speed_0": 0,  # No fan on first layer
+def create_prusa_ini(quality: dict, material: dict, infill: int, printer: str = "generic") -> Path:
+    """Create a PrusaSlicer INI config for LEGO brick printing."""
 
-        # Speed settings (conservative for LEGO precision)
-        "speed_print": 50,
-        "speed_infill": 60,
-        "speed_wall_0": 30,  # Slower outer wall for quality
-        "speed_wall_x": 40,
-        "speed_topbottom": 40,
-        "speed_travel": 150,
-        "speed_layer_0": 20,  # Slow first layer
+    # Load printer-specific overrides
+    printer_profile = load_printer_profile(printer)
 
-        # Retraction
-        "retraction_enable": True,
-        "retraction_amount": 0.8,
-        "retraction_speed": 45,
+    # Apply printer-specific dimensional accuracy if available
+    dim_accuracy = printer_profile.get("dimensional_accuracy", {})
+    xy_comp = dim_accuracy.get("xy_compensation", -0.08)
+    elephant_foot = dim_accuracy.get("elephant_foot_compensation", 0.15)
 
-        # Quality settings for LEGO
-        "outer_inset_first": True,  # External perimeters first
-        "fill_outline_gaps": True,  # Fill thin walls
-        "filter_out_tiny_gaps": False,  # Keep small details
+    # Apply printer-specific speeds if available
+    speed_overrides = printer_profile.get("speed_overrides", {})
+    outer_wall_speed = speed_overrides.get("outer_wall_speed", 30)
+    inner_wall_speed = speed_overrides.get("inner_wall_speed", 40)
+    infill_speed_val = speed_overrides.get("sparse_infill_speed", 60)
+    first_layer_speed = speed_overrides.get("first_layer_speed", 20)
 
-        # Nozzle/machine
-        "machine_nozzle_size": 0.4,
-        "line_width": 0.4,
+    # Check if Bambu printer (uses different G-code flavor)
+    is_bambu = "bambu" in printer.lower()
+    gcode_flavor = "klipper" if is_bambu else "marlin"
 
-        # Adhesion
-        "adhesion_type": "skirt",
-        "skirt_line_count": 3,
-    }
+    # PrusaSlicer uses INI format
+    config_lines = [
+        "# PrusaSlicer config for LEGO bricks",
+        f"# Generated by LEGO MCP Slicer Service for {printer}",
+        "",
+        "# Layer settings",
+        f"layer_height = {quality['layer_height']}",
+        f"first_layer_height = {quality['layer_height'] * 1.2:.2f}",
+        "",
+        "# Perimeters/walls",
+        f"perimeters = {quality['wall_count']}",
+        f"top_solid_layers = {quality['top_layers']}",
+        f"bottom_solid_layers = {quality['bottom_layers']}",
+        "",
+        "# Infill",
+        f"fill_density = {infill}%",
+        "fill_pattern = grid",
+        "",
+        "# Temperature",
+        f"temperature = {material['temp_extruder']}",
+        f"first_layer_temperature = {material['temp_extruder'] + 5}",
+        f"bed_temperature = {material['temp_bed']}",
+        f"first_layer_bed_temperature = {material['temp_bed'] + 5}",
+        "",
+        "# Fan",
+        f"max_fan_speed = {material['fan_speed']}",
+        f"min_fan_speed = {material['fan_speed']}",
+        "disable_fan_first_layers = 1",
+        "",
+        "# Speed (mm/s) - tuned for LEGO precision",
+        f"perimeter_speed = {inner_wall_speed}",
+        f"external_perimeter_speed = {outer_wall_speed}",
+        f"infill_speed = {infill_speed_val}",
+        f"solid_infill_speed = {int(infill_speed_val * 0.8)}",
+        f"top_solid_infill_speed = {int(outer_wall_speed)}",
+        f"first_layer_speed = {first_layer_speed}",
+        "travel_speed = 150",
+        "",
+        "# Retraction",
+        "retract_length = 0.8",
+        "retract_speed = 45",
+        "",
+        "# Nozzle",
+        "nozzle_diameter = 0.4",
+        "extrusion_width = 0.45",
+        "",
+        "# Quality for LEGO - external perimeters first for clean finish",
+        "external_perimeters_first = 1",
+        "infill_first = 0",
+        "",
+        "# Skirt for adhesion check",
+        "skirts = 3",
+        "skirt_distance = 3",
+        "skirt_height = 1",
+        "",
+        "# Support disabled for standard bricks",
+        "support_material = 0",
+        "",
+        "# XY compensation for LEGO tolerance (slight shrink)",
+        f"xy_size_compensation = {xy_comp}",
+        f"elephant_foot_compensation = {elephant_foot}",
+        "",
+        "# G-code flavor",
+        f"gcode_flavor = {gcode_flavor}",
+        "",
+        "# Start/End G-code",
+        "start_gcode = G28 ; Home all axes\\nG1 Z5 F3000 ; Lift nozzle",
+        "end_gcode = M104 S0 ; Turn off extruder\\nM140 S0 ; Turn off bed\\nG28 X0 Y0 ; Home X/Y\\nM84 ; Disable steppers",
+    ]
 
-    config_path = PROFILES_DIR / "lego_config.json"
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-
+    config_path = TEMP_DIR / f"lego_config_{printer}.ini"
     with open(config_path, "w") as f:
-        json.dump(config, f, indent=2)
+        f.write("\n".join(config_lines))
 
     return config_path
 
@@ -191,22 +250,33 @@ def parse_gcode_stats(gcode_path: Path) -> dict:
         with open(gcode_path, "r") as f:
             content = f.read()
 
-            # CuraEngine time format: ;TIME:1234 (seconds)
-            time_match = re.search(r";TIME:(\d+)", content)
+            # PrusaSlicer format: ; estimated printing time (normal mode) = 1h 2m 3s
+            time_match = re.search(r"; estimated printing time.*?=\s*((?:\d+h\s*)?(?:\d+m\s*)?(?:\d+s)?)", content)
             if time_match:
-                stats["time_min"] = int(time_match.group(1)) / 60
+                time_str = time_match.group(1)
+                total_min = 0
+                hours = re.search(r"(\d+)h", time_str)
+                mins = re.search(r"(\d+)m", time_str)
+                secs = re.search(r"(\d+)s", time_str)
+                if hours:
+                    total_min += int(hours.group(1)) * 60
+                if mins:
+                    total_min += int(mins.group(1))
+                if secs:
+                    total_min += int(secs.group(1)) / 60
+                stats["time_min"] = total_min
 
-            # Filament used: ;Filament used: 1.234m
-            filament_match = re.search(r";Filament used:\s*([\d.]+)m", content)
-            if filament_match:
-                stats["filament_m"] = float(filament_match.group(1))
+            # Filament used: ; filament used [mm] = 1234.56
+            filament_mm_match = re.search(r"; filament used \[mm\]\s*=\s*([\d.]+)", content)
+            if filament_mm_match:
+                stats["filament_m"] = float(filament_mm_match.group(1)) / 1000
                 # Estimate grams (PLA ~1.24 g/cm³, 1.75mm filament)
-                stats["filament_g"] = stats["filament_m"] * 2.98  # ~2.98g per meter
+                stats["filament_g"] = stats["filament_m"] * 2.98
 
-            # Layer count: ;LAYER_COUNT:64
-            layer_match = re.search(r";LAYER_COUNT:(\d+)", content)
-            if layer_match:
-                stats["layers"] = int(layer_match.group(1))
+            # Layer count from G-code
+            layer_matches = re.findall(r";LAYER:(\d+)", content)
+            if layer_matches:
+                stats["layers"] = max(int(x) for x in layer_matches) + 1
 
     except FileNotFoundError:
         logger.warning(f"G-code file not found: {gcode_path}")
@@ -221,15 +291,15 @@ def parse_gcode_stats(gcode_path: Path) -> dict:
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Check service health and CuraEngine availability."""
-    engine_available = is_curaengine_available()
-    version = get_curaengine_version() if engine_available else "not installed"
+    """Check service health and PrusaSlicer availability."""
+    engine_available = is_prusaslicer_available()
+    version = get_prusaslicer_version() if engine_available else "not installed"
 
     return HealthResponse(
         status="ok" if engine_available else "degraded",
         service="LEGO Slicer Service",
-        version="1.0.0",
-        engine="CuraEngine",
+        version="2.0.0",
+        engine=f"PrusaSlicer {version}",
         engine_available=engine_available,
     )
 
@@ -237,9 +307,47 @@ async def health_check():
 @app.get("/printers")
 async def list_printers():
     """List available printer profiles."""
-    # CuraEngine supports any printer with proper config
-    printers = ["generic", "prusa_mk3s", "prusa_mk4", "ender3", "voron", "bambu_x1"]
+    printers = [
+        "generic",
+        "prusa_mk3s", "prusa_mk4", "prusa_mini",
+        "bambu_p1s", "bambu_x1c", "bambu_a1",
+        "ender3", "ender3_v2",
+        "voron_24",
+    ]
     return {"printers": printers}
+
+
+@app.get("/profiles")
+async def list_profiles():
+    """
+    List available printer profiles with details (alias for /printers).
+
+    Returns all available printer profiles with their settings.
+    """
+    printers = [
+        "generic",
+        "prusa_mk3s", "prusa_mk4", "prusa_mini",
+        "bambu_p1s", "bambu_x1c", "bambu_a1",
+        "ender3", "ender3_v2",
+        "voron_24",
+    ]
+
+    # Load profile details if available
+    profiles = {}
+    for printer in printers:
+        profile_data = load_printer_profile(printer)
+        profiles[printer] = {
+            "name": printer,
+            "description": profile_data.get("description", f"{printer} printer profile"),
+            "has_custom_settings": bool(profile_data),
+        }
+
+    return {
+        "profiles": printers,
+        "details": profiles,
+        "qualities": list(QUALITY_PRESETS.keys()),
+        "materials": list(MATERIAL_SETTINGS.keys()),
+    }
 
 
 @app.get("/materials")
@@ -268,14 +376,14 @@ async def slice_lego_stl(request: LegoSliceRequest):
     """
     Slice a LEGO brick STL with optimized settings.
 
-    Uses fine quality with settings tuned for LEGO dimensions.
+    Uses LEGO-optimized quality preset with settings tuned for LEGO dimensions.
     """
     # Convert to standard slice request with LEGO-optimized settings
     standard_request = SliceRequest(
         stl_path=request.stl_path,
         printer=request.printer,
         material="pla",  # PLA is best for LEGO
-        quality="fine",  # Fine quality for precision
+        quality="lego",  # LEGO-optimized quality preset
         infill_percent=20,  # 20% infill for bricks
         output_filename=request.output_path.split("/")[-1] if request.output_path else None,
     )
@@ -287,26 +395,26 @@ async def slice_stl(request: SliceRequest):
     """
     Slice an STL file and generate G-code.
 
-    Uses CuraEngine CLI with LEGO-optimized settings.
+    Uses PrusaSlicer CLI with LEGO-optimized settings.
     """
     # Validate input file
     stl_path = Path(request.stl_path)
     if not stl_path.exists():
         raise HTTPException(404, f"STL file not found: {request.stl_path}")
 
-    # Check if CuraEngine is available
-    if not is_curaengine_available():
+    # Check if PrusaSlicer is available
+    if not is_prusaslicer_available():
         return SliceResponse(
             success=False,
-            error="CuraEngine not available. Please check installation.",
+            error="PrusaSlicer not available. Please check installation.",
         )
 
     # Get quality settings
     quality = QUALITY_PRESETS.get(request.quality, QUALITY_PRESETS["fine"])
     material = MATERIAL_SETTINGS.get(request.material, MATERIAL_SETTINGS["pla"])
 
-    # Create config file
-    config_path = create_cura_config(quality, material, request.infill_percent)
+    # Create config file with printer-specific settings
+    config_path = create_prusa_ini(quality, material, request.infill_percent, request.printer)
 
     # Determine output path
     if request.output_filename:
@@ -317,25 +425,28 @@ async def slice_stl(request: SliceRequest):
 
     output_path = OUTPUT_DIR / output_name
 
-    # Build CuraEngine command
-    # CuraEngine slice -j config.json -o output.gcode -l input.stl
+    # Build PrusaSlicer command
+    # prusa-slicer --load config.ini -g -o output.gcode input.stl
     cmd = [
-        "CuraEngine",
-        "slice",
-        "-j", str(config_path),
+        "prusa-slicer",
+        "--load", str(config_path),
+        "-g",  # Export G-code (short form of --gcode)
         "-o", str(output_path),
-        "-l", str(stl_path),
+        str(stl_path),
     ]
 
+    logger.info(f"Running: {' '.join(cmd)}")
+
     try:
-        # Run CuraEngine
+        # Run PrusaSlicer
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=300  # 5 minute timeout
         )
 
         if result.returncode != 0:
             error_msg = result.stderr or result.stdout or "Unknown error"
-            return SliceResponse(success=False, error=f"CuraEngine failed: {error_msg}")
+            logger.error(f"PrusaSlicer failed: {error_msg}")
+            return SliceResponse(success=False, error=f"PrusaSlicer failed: {error_msg}")
 
         if not output_path.exists():
             return SliceResponse(success=False, error="G-code file was not created")
@@ -356,6 +467,7 @@ async def slice_stl(request: SliceRequest):
     except subprocess.TimeoutExpired:
         return SliceResponse(success=False, error="Slicing timed out (>5 minutes)")
     except Exception as e:
+        logger.exception("Error during slicing")
         return SliceResponse(success=False, error=str(e))
 
 

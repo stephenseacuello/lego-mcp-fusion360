@@ -1,0 +1,5418 @@
+openapi: 3.0.3
+info:
+  title: LegoMCP Manufacturing Platform API
+  description: |
+    # LegoMCP v5.0 World-Class Manufacturing API
+
+    Complete REST API for the LegoMCP Cyber-Physical Production System (CPPS).
+    This API provides comprehensive endpoints for:
+
+    - **Brick Creation & CAD**: Create LEGO-compatible bricks in Fusion 360
+    - **Manufacturing Execution (MES)**: Work orders, operations, OEE tracking
+    - **Quality Management**: SPC, FMEA, QFD, Vision AI inspection
+    - **ERP Integration**: BOM, costing, orders, ATP/CTP
+    - **MRP Engine**: Material planning, capacity planning
+    - **Digital Twin**: Real-time state synchronization
+    - **Advanced Scheduling**: CP-SAT, NSGA-II, RL optimization
+    - **Sustainability**: LCA, carbon tracking, circular economy
+    - **Compliance**: ISO 9001, 21 CFR Part 11, audit trail
+
+    ## Authentication
+    Currently no authentication required for local deployment.
+
+    ## Response Format
+    All API responses return JSON with standard structure:
+    ```json
+    {
+      "success": true,
+      "data": { ... },
+      "error": null
+    }
+    ```
+
+    ## WebSocket Events
+    Real-time updates available via Socket.IO at `/socket.io/`
+
+  version: 5.0.0
+  contact:
+    name: LegoMCP Team
+    url: https://github.com/legomcp/fusion360
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+
+servers:
+  - url: http://localhost:5000
+    description: Dashboard Server
+  - url: http://127.0.0.1:8765
+    description: Fusion 360 Add-in
+  - url: http://localhost:8081
+    description: Slicer Service
+
+tags:
+  - name: Health
+    description: System health and status endpoints
+  - name: Catalog
+    description: LEGO brick catalog operations
+  - name: Brick Creation
+    description: Create and validate bricks
+  - name: Export
+    description: Export bricks to various formats
+  - name: Files
+    description: File management operations
+  - name: MES
+    description: Manufacturing Execution System
+  - name: Quality
+    description: Quality management and inspection
+  - name: SPC
+    description: Statistical Process Control
+  - name: Vision
+    description: Computer Vision quality inspection
+  - name: FMEA
+    description: Failure Mode and Effects Analysis
+  - name: ERP
+    description: Enterprise Resource Planning
+  - name: MRP
+    description: Material Requirements Planning
+  - name: Digital Twin
+    description: Digital twin management
+  - name: ISO 23247
+    description: ISO 23247 compliant Observable Manufacturing Elements (OME)
+  - name: Unity
+    description: Unity 3D visualization and real-time scene management
+  - name: Robotic Arms
+    description: Robotic arm scheduling and synchronized motion control
+  - name: VR Training
+    description: Virtual Reality training simulations
+  - name: Quality Heatmap
+    description: 3D quality visualization and defect mapping
+  - name: Supply Chain Twin
+    description: Digital twin of supply chain network
+  - name: Scheduling
+    description: Production scheduling optimization
+  - name: AI Copilot
+    description: AI-powered manufacturing assistant
+  - name: Sustainability
+    description: Carbon tracking and LCA
+  - name: Compliance
+    description: Regulatory compliance and audit
+  - name: Supply Chain
+    description: Supply chain management
+  - name: Edge/IIoT
+    description: Edge computing and IoT devices
+
+paths:
+  # ===========================================================================
+  # HEALTH & STATUS
+  # ===========================================================================
+  /api/health:
+    get:
+      tags: [Health]
+      summary: API Health Check
+      description: Returns health status of dashboard and connected services
+      operationId: getHealth
+      responses:
+        '200':
+          description: Health status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/status:
+    get:
+      tags: [Health]
+      summary: System Status
+      description: Get detailed status of all services
+      operationId: getStatus
+      responses:
+        '200':
+          description: System status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /api/status/{service}:
+    get:
+      tags: [Health]
+      summary: Service Status
+      description: Get status of a specific service
+      operationId: getServiceStatus
+      parameters:
+        - name: service
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [fusion360, slicer, mcp, redis]
+      responses:
+        '200':
+          description: Service status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceStatus'
+
+  # ===========================================================================
+  # CATALOG
+  # ===========================================================================
+  /api/catalog:
+    get:
+      tags: [Catalog]
+      summary: List Bricks
+      description: Get paginated list of bricks from catalog
+      operationId: listBricks
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+          description: Filter by category
+        - name: q
+          in: query
+          schema:
+            type: string
+          description: Search query
+        - name: sort
+          in: query
+          schema:
+            type: string
+            default: name
+            enum: [name, category, size]
+        - name: order
+          in: query
+          schema:
+            type: string
+            default: asc
+            enum: [asc, desc]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of bricks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CatalogResponse'
+
+  /api/catalog/{brick_id}:
+    get:
+      tags: [Catalog]
+      summary: Get Brick
+      description: Get details of a specific brick
+      operationId: getBrick
+      parameters:
+        - name: brick_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Brick details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Brick'
+        '404':
+          description: Brick not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /api/catalog/categories:
+    get:
+      tags: [Catalog]
+      summary: List Categories
+      description: Get all brick categories
+      operationId: listCategories
+      responses:
+        '200':
+          description: List of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Category'
+
+  /api/catalog/search:
+    get:
+      tags: [Catalog]
+      summary: Search Bricks
+      description: Search bricks by name or description
+      operationId: searchBricks
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        '200':
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Brick'
+
+  # ===========================================================================
+  # BRICK CREATION
+  # ===========================================================================
+  /api/brick/create:
+    post:
+      tags: [Brick Creation]
+      summary: Create Brick
+      description: Create a new LEGO brick in Fusion 360
+      operationId: createBrick
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrickCreateRequest'
+      responses:
+        '200':
+          description: Brick created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BrickCreateResponse'
+
+  /api/brick/validate:
+    post:
+      tags: [Brick Creation]
+      summary: Validate Parameters
+      description: Validate brick parameters before creation
+      operationId: validateBrick
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BrickValidateRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ValidationResult'
+
+  /api/brick/dimensions:
+    post:
+      tags: [Brick Creation]
+      summary: Compute Dimensions
+      description: Calculate brick dimensions from stud counts
+      operationId: computeDimensions
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                width_studs:
+                  type: integer
+                  minimum: 1
+                  maximum: 16
+                depth_studs:
+                  type: integer
+                  minimum: 1
+                  maximum: 16
+                height_plates:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: Computed dimensions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Dimensions'
+
+  /api/brick/presets:
+    get:
+      tags: [Brick Creation]
+      summary: Get Presets
+      description: Get predefined brick presets
+      operationId: getPresets
+      responses:
+        '200':
+          description: Brick presets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BrickPreset'
+
+  # ===========================================================================
+  # EXPORT
+  # ===========================================================================
+  /api/export/stl:
+    post:
+      tags: [Export]
+      summary: Export to STL
+      description: Export component to STL format
+      operationId: exportSTL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [component]
+              properties:
+                component:
+                  type: string
+                  description: Component name
+                output_path:
+                  type: string
+                  description: Output file path
+                refinement:
+                  type: string
+                  enum: [low, medium, high]
+                  default: high
+      responses:
+        '200':
+          description: Export result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExportResult'
+
+  /api/export/formats:
+    get:
+      tags: [Export]
+      summary: List Export Formats
+      description: Get available export formats
+      operationId: listExportFormats
+      responses:
+        '200':
+          description: Export formats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: string
+
+  # ===========================================================================
+  # MES - Manufacturing Execution System
+  # ===========================================================================
+  /api/mes/work-orders:
+    get:
+      tags: [MES]
+      summary: List Work Orders
+      description: Get list of work orders with filtering
+      operationId: listWorkOrders
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [planned, released, in_progress, completed, cancelled]
+        - name: priority
+          in: query
+          schema:
+            type: string
+            enum: [low, medium, high, urgent]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        '200':
+          description: Work orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/WorkOrder'
+    post:
+      tags: [MES]
+      summary: Create Work Order
+      description: Create a new work order
+      operationId: createWorkOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkOrderCreate'
+      responses:
+        '201':
+          description: Work order created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkOrder'
+
+  /api/mes/work-orders/{id}:
+    get:
+      tags: [MES]
+      summary: Get Work Order
+      description: Get work order details
+      operationId: getWorkOrder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Work order details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkOrder'
+        '404':
+          description: Work order not found
+
+  /api/mes/work-orders/{id}/release:
+    post:
+      tags: [MES]
+      summary: Release Work Order
+      description: Release work order to production
+      operationId: releaseWorkOrder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Work order released
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkOrder'
+
+  /api/mes/work-orders/{id}/complete:
+    post:
+      tags: [MES]
+      summary: Complete Work Order
+      description: Mark work order as completed
+      operationId: completeWorkOrder
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                completed_qty:
+                  type: integer
+                scrap_qty:
+                  type: integer
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Work order completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkOrder'
+
+  /api/mes/oee/{work_center_id}:
+    get:
+      tags: [MES]
+      summary: Get OEE Metrics
+      description: Get OEE metrics for a work center
+      operationId: getOEE
+      parameters:
+        - name: work_center_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [1d, 7d, 30d, 90d]
+            default: 7d
+      responses:
+        '200':
+          description: OEE metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OEEMetrics'
+
+  /api/mes/shop-floor/dashboard:
+    get:
+      tags: [MES]
+      summary: Shop Floor Dashboard
+      description: Get real-time shop floor display data
+      operationId: getShopFloorDashboard
+      responses:
+        '200':
+          description: Shop floor data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShopFloorDashboard'
+
+  /api/mes/andon/board:
+    get:
+      tags: [MES]
+      summary: Andon Board
+      description: Get Andon board display data
+      operationId: getAndonBoard
+      responses:
+        '200':
+          description: Andon board data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AndonBoard'
+
+  /api/mes/andon/trigger:
+    post:
+      tags: [MES]
+      summary: Trigger Andon Alert
+      description: Trigger an Andon alert
+      operationId: triggerAndon
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AndonTrigger'
+      responses:
+        '200':
+          description: Alert triggered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AndonAlert'
+
+  # ===========================================================================
+  # QUALITY
+  # ===========================================================================
+  /api/quality/inspections:
+    get:
+      tags: [Quality]
+      summary: List Inspections
+      description: Get list of quality inspections
+      operationId: listInspections
+      parameters:
+        - name: work_order
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, in_progress, completed, failed]
+      responses:
+        '200':
+          description: Inspections
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Inspection'
+    post:
+      tags: [Quality]
+      summary: Create Inspection
+      description: Create a new inspection
+      operationId: createInspection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InspectionCreate'
+      responses:
+        '201':
+          description: Inspection created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Inspection'
+
+  /api/quality/spc/data-point:
+    post:
+      tags: [SPC]
+      summary: Add SPC Data Point
+      description: Add a measurement to SPC control chart
+      operationId: addSPCDataPoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SPCDataPoint'
+      responses:
+        '200':
+          description: Data point added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SPCResult'
+
+  /api/quality/spc/control-chart/{id}:
+    get:
+      tags: [SPC]
+      summary: Get Control Chart
+      description: Get SPC control chart data
+      operationId: getControlChart
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Control chart data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControlChart'
+
+  /api/quality/spc/capability/{id}:
+    get:
+      tags: [SPC]
+      summary: Process Capability
+      description: Get process capability indices
+      operationId: getProcessCapability
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Process capability
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProcessCapability'
+
+  /api/quality/vision/detect:
+    post:
+      tags: [Vision]
+      summary: Detect Defects
+      description: Run AI defect detection on image
+      operationId: detectDefects
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                image:
+                  type: string
+                  format: binary
+                model:
+                  type: string
+                  default: yolo11
+      responses:
+        '200':
+          description: Detection results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VisionDetectionResult'
+
+  /api/quality/vision/layer-inspect:
+    post:
+      tags: [Vision]
+      summary: Layer Inspection
+      description: Inspect 3D print layer quality
+      operationId: inspectLayer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LayerInspectRequest'
+      responses:
+        '200':
+          description: Inspection result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LayerInspectResult'
+
+  /api/quality/fmea:
+    post:
+      tags: [FMEA]
+      summary: Create FMEA
+      description: Create a new FMEA analysis
+      operationId: createFMEA
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FMEACreate'
+      responses:
+        '201':
+          description: FMEA created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FMEA'
+
+  /api/quality/fmea/{id}:
+    get:
+      tags: [FMEA]
+      summary: Get FMEA
+      description: Get FMEA analysis with RPN values
+      operationId: getFMEA
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: FMEA analysis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FMEA'
+
+  /api/quality/zero-defect/predict:
+    post:
+      tags: [Quality]
+      summary: Predict Quality
+      description: Predict quality using AI model
+      operationId: predictQuality
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QualityPredictRequest'
+      responses:
+        '200':
+          description: Quality prediction
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QualityPrediction'
+
+  # ===========================================================================
+  # ERP
+  # ===========================================================================
+  /api/erp/bom/{part_id}:
+    get:
+      tags: [ERP]
+      summary: Get BOM
+      description: Get Bill of Materials for a part
+      operationId: getBOM
+      parameters:
+        - name: part_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: BOM
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BOM'
+
+  /api/erp/bom/{part_id}/explode:
+    get:
+      tags: [ERP]
+      summary: Explode BOM
+      description: Get fully exploded BOM with all levels
+      operationId: explodeBOM
+      parameters:
+        - name: part_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Exploded BOM
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplodedBOM'
+
+  /api/erp/orders:
+    get:
+      tags: [ERP]
+      summary: List Orders
+      description: Get customer orders
+      operationId: listOrders
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: customer_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Orders
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CustomerOrder'
+    post:
+      tags: [ERP]
+      summary: Create Order
+      description: Create a new customer order
+      operationId: createOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreate'
+      responses:
+        '201':
+          description: Order created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerOrder'
+
+  /api/erp/orders/{id}/atp:
+    get:
+      tags: [ERP]
+      summary: Available to Promise
+      description: Check ATP for order
+      operationId: getATP
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: ATP result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ATPResult'
+
+  /api/erp/orders/{id}/ctp:
+    get:
+      tags: [ERP]
+      summary: Capable to Promise
+      description: Check CTP for order
+      operationId: getCTP
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: CTP result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CTPResult'
+
+  # ===========================================================================
+  # SCHEDULING
+  # ===========================================================================
+  /api/scheduling/optimize/cp-sat:
+    post:
+      tags: [Scheduling]
+      summary: CP-SAT Optimization
+      description: Optimize schedule using Google OR-Tools CP-SAT solver
+      operationId: optimizeCPSAT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleOptimizeRequest'
+      responses:
+        '200':
+          description: Optimized schedule
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScheduleResult'
+
+  /api/scheduling/optimize/nsga2:
+    post:
+      tags: [Scheduling]
+      summary: NSGA-II Multi-Objective
+      description: Optimize using NSGA-II multi-objective genetic algorithm
+      operationId: optimizeNSGA2
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MultiObjectiveRequest'
+      responses:
+        '200':
+          description: Pareto optimal solutions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ParetoResult'
+
+  /api/scheduling/optimize/rl-dispatch:
+    post:
+      tags: [Scheduling]
+      summary: RL Dispatching
+      description: Real-time dispatching using reinforcement learning
+      operationId: rlDispatch
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RLDispatchRequest'
+      responses:
+        '200':
+          description: Dispatch decision
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DispatchResult'
+
+  /api/scheduling/gantt:
+    get:
+      tags: [Scheduling]
+      summary: Gantt Chart Data
+      description: Get schedule data for Gantt chart visualization
+      operationId: getGanttData
+      parameters:
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date
+      responses:
+        '200':
+          description: Gantt chart data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GanttData'
+
+  # ===========================================================================
+  # AI COPILOT
+  # ===========================================================================
+  /api/ai/ask:
+    post:
+      tags: [AI Copilot]
+      summary: Ask Question
+      description: Ask manufacturing question to AI copilot
+      operationId: askAI
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AIAskRequest'
+      responses:
+        '200':
+          description: AI response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AIAskResponse'
+
+  /api/ai/context:
+    get:
+      tags: [AI Copilot]
+      summary: Get Context
+      description: Get current manufacturing context for AI
+      operationId: getAIContext
+      responses:
+        '200':
+          description: Manufacturing context
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ManufacturingContext'
+
+  /api/ai/explain:
+    post:
+      tags: [AI Copilot]
+      summary: Explain Anomaly
+      description: Get AI explanation for an anomaly
+      operationId: explainAnomaly
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ExplainRequest'
+      responses:
+        '200':
+          description: Explanation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ExplainResponse'
+
+  # ===========================================================================
+  # SUSTAINABILITY
+  # ===========================================================================
+  /api/sustainability/carbon/footprint:
+    post:
+      tags: [Sustainability]
+      summary: Calculate Carbon Footprint
+      description: Calculate carbon footprint for production
+      operationId: calculateCarbonFootprint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CarbonFootprintRequest'
+      responses:
+        '200':
+          description: Carbon footprint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CarbonFootprint'
+
+  /api/sustainability/lca/{part_id}/impact:
+    get:
+      tags: [Sustainability]
+      summary: LCA Impact
+      description: Get Life Cycle Assessment impact for part
+      operationId: getLCAImpact
+      parameters:
+        - name: part_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: LCA impact
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LCAImpact'
+
+  /api/sustainability/circular/metrics:
+    get:
+      tags: [Sustainability]
+      summary: Circular Economy Metrics
+      description: Get circular economy metrics
+      operationId: getCircularMetrics
+      responses:
+        '200':
+          description: Circular metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CircularMetrics'
+
+  # ===========================================================================
+  # COMPLIANCE
+  # ===========================================================================
+  /api/compliance/audit/trail:
+    get:
+      tags: [Compliance]
+      summary: Get Audit Trail
+      description: Get audit trail entries
+      operationId: getAuditTrail
+      parameters:
+        - name: resource_type
+          in: query
+          schema:
+            type: string
+        - name: resource_id
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+      responses:
+        '200':
+          description: Audit trail
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AuditEntry'
+    post:
+      tags: [Compliance]
+      summary: Log Audit Entry
+      description: Create an audit trail entry
+      operationId: logAuditEntry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditEntryCreate'
+      responses:
+        '201':
+          description: Entry logged
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEntry'
+
+  /api/compliance/audit/signature/request:
+    post:
+      tags: [Compliance]
+      summary: Request E-Signature
+      description: Request electronic signature (21 CFR Part 11)
+      operationId: requestSignature
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SignatureRequest'
+      responses:
+        '200':
+          description: Signature request created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SignatureResponse'
+
+  /api/compliance/iso/status:
+    get:
+      tags: [Compliance]
+      summary: ISO Compliance Status
+      description: Get ISO compliance tracking status
+      operationId: getISOStatus
+      parameters:
+        - name: standard
+          in: query
+          schema:
+            type: string
+            enum: [ISO9001, ISO13485, ISO14001]
+            default: ISO9001
+      responses:
+        '200':
+          description: ISO compliance status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ISOStatus'
+
+  /api/compliance/capa/{capa_id}:
+    get:
+      tags: [Compliance]
+      summary: Get CAPA
+      description: Get CAPA details
+      operationId: getCAPA
+      parameters:
+        - name: capa_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: CAPA details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CAPA'
+
+  # ===========================================================================
+  # DIGITAL TWIN
+  # ===========================================================================
+  /api/twin/{asset_id}/state:
+    get:
+      tags: [Digital Twin]
+      summary: Get Twin State
+      description: Get current state of digital twin
+      operationId: getTwinState
+      parameters:
+        - name: asset_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Twin state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TwinState'
+
+  /api/twin/{asset_id}/maintenance/predict:
+    get:
+      tags: [Digital Twin]
+      summary: Predict Maintenance
+      description: Get predictive maintenance forecast
+      operationId: predictMaintenance
+      parameters:
+        - name: asset_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Maintenance prediction
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaintenancePrediction'
+
+  # ===========================================================================
+  # ISO 23247 - OBSERVABLE MANUFACTURING ELEMENTS
+  # ===========================================================================
+  /api/ome:
+    get:
+      tags: [ISO 23247]
+      summary: List Observable Manufacturing Elements
+      description: Get list of all OMEs with optional filtering by type and namespace
+      operationId: listOMEs
+      parameters:
+        - name: ome_type
+          in: query
+          schema:
+            type: string
+            enum: [factory, production_line, work_cell, equipment, sensor, actuator, tool, fixture]
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+        - name: lifecycle_state
+          in: query
+          schema:
+            type: string
+            enum: [design, commissioning, active, maintenance, degraded, standby, offline, retired]
+        - name: parent_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of OMEs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ObservableManufacturingElement'
+    post:
+      tags: [ISO 23247]
+      summary: Register Observable Manufacturing Element
+      description: Register a new OME following ISO 23247-3 structure
+      operationId: createOME
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OMECreate'
+      responses:
+        '201':
+          description: OME created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservableManufacturingElement'
+
+  /api/ome/{id}:
+    get:
+      tags: [ISO 23247]
+      summary: Get OME Details
+      description: Get complete OME information including static and dynamic attributes
+      operationId: getOME
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OME details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservableManufacturingElement'
+        '404':
+          description: OME not found
+    put:
+      tags: [ISO 23247]
+      summary: Update OME
+      description: Update OME attributes (static or dynamic)
+      operationId: updateOME
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OMEUpdate'
+      responses:
+        '200':
+          description: OME updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservableManufacturingElement'
+    delete:
+      tags: [ISO 23247]
+      summary: Retire OME
+      description: Retire an OME (sets lifecycle to retired)
+      operationId: retireOME
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OME retired
+
+  /api/ome/{id}/state:
+    put:
+      tags: [ISO 23247]
+      summary: Update OME Lifecycle State
+      description: Transition OME to a new lifecycle state
+      operationId: updateOMEState
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [state]
+              properties:
+                state:
+                  type: string
+                  enum: [design, commissioning, active, maintenance, degraded, standby, offline, retired]
+                reason:
+                  type: string
+      responses:
+        '200':
+          description: State updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ObservableManufacturingElement'
+
+  /api/ome/{id}/twins:
+    get:
+      tags: [ISO 23247]
+      summary: List Digital Twin Instances
+      description: Get all digital twin instances associated with an OME
+      operationId: getOMETwins
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Twin instances
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DigitalTwinInstance'
+    post:
+      tags: [ISO 23247]
+      summary: Create Digital Twin for OME
+      description: Instantiate a new digital twin for an OME
+      operationId: createOMETwin
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TwinInstanceCreate'
+      responses:
+        '201':
+          description: Twin created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DigitalTwinInstance'
+
+  /api/ome/{id}/hierarchy:
+    get:
+      tags: [ISO 23247]
+      summary: Get OME Hierarchy
+      description: Get hierarchical structure of OME and its children
+      operationId: getOMEHierarchy
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: depth
+          in: query
+          schema:
+            type: integer
+            default: -1
+          description: Maximum depth (-1 for unlimited)
+      responses:
+        '200':
+          description: OME hierarchy tree
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OMEHierarchy'
+
+  /api/compliance/iso23247/status:
+    get:
+      tags: [ISO 23247]
+      summary: ISO 23247 Compliance Status
+      description: Get current ISO 23247 conformance level and status
+      operationId: getISO23247Status
+      responses:
+        '200':
+          description: Compliance status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ISO23247Status'
+
+  /api/compliance/iso23247/report:
+    get:
+      tags: [ISO 23247]
+      summary: ISO 23247 Compliance Report
+      description: Generate detailed ISO 23247 compliance report
+      operationId: getISO23247Report
+      parameters:
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum: [json, pdf, html]
+            default: json
+      responses:
+        '200':
+          description: Compliance report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ISO23247Report'
+
+  /api/compliance/iso23247/validate:
+    post:
+      tags: [ISO 23247]
+      summary: Validate ISO 23247 Compliance
+      description: Run validation checks against ISO 23247 requirements
+      operationId: validateISO23247
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: array
+                  items:
+                    type: string
+                    enum: [ome_registry, digital_twins, sync_protocol, data_exchange]
+      responses:
+        '200':
+          description: Validation results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ISO23247ValidationResult'
+
+  # ===========================================================================
+  # UNITY 3D VISUALIZATION
+  # ===========================================================================
+  /api/unity/scene:
+    get:
+      tags: [Unity]
+      summary: Get Full Scene State
+      description: Get complete 3D scene state for Unity rendering
+      operationId: getUnityScene
+      parameters:
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+        - name: lod
+          in: query
+          schema:
+            type: string
+            enum: [high, medium, low]
+            default: medium
+          description: Level of detail for 3D models
+      responses:
+        '200':
+          description: Scene state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitySceneState'
+
+  /api/unity/scene/delta:
+    get:
+      tags: [Unity]
+      summary: Get Scene Delta
+      description: Get changes since a specific timestamp for efficient updates
+      operationId: getUnitySceneDelta
+      parameters:
+        - name: since
+          in: query
+          required: true
+          schema:
+            type: string
+            format: date-time
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+      responses:
+        '200':
+          description: Scene delta
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnitySceneDelta'
+
+  /api/unity/scene/camera:
+    post:
+      tags: [Unity]
+      summary: Save Camera Preset
+      description: Save a camera position/rotation preset for the scene
+      operationId: saveCameraPreset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CameraPreset'
+      responses:
+        '201':
+          description: Preset saved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CameraPreset'
+
+  /api/unity/equipment:
+    get:
+      tags: [Unity]
+      summary: List Equipment with 3D Data
+      description: Get all equipment with Unity-compatible 3D positioning
+      operationId: listUnityEquipment
+      parameters:
+        - name: namespace
+          in: query
+          schema:
+            type: string
+            default: default
+      responses:
+        '200':
+          description: Equipment list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UnityEquipment'
+
+  /api/unity/equipment/{id}:
+    get:
+      tags: [Unity]
+      summary: Get Equipment 3D State
+      description: Get single equipment with complete 3D state
+      operationId: getUnityEquipment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Equipment state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnityEquipment'
+
+  /api/unity/equipment/{id}/highlight:
+    post:
+      tags: [Unity]
+      summary: Trigger Highlight Animation
+      description: Trigger visual highlight effect on equipment in Unity
+      operationId: highlightEquipment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                color:
+                  type: string
+                  default: "#FFFF00"
+                duration_ms:
+                  type: integer
+                  default: 2000
+                pulse:
+                  type: boolean
+                  default: true
+      responses:
+        '200':
+          description: Highlight triggered
+
+  /api/unity/anchors:
+    get:
+      tags: [Unity]
+      summary: List Spatial Anchors
+      description: Get AR/VR spatial anchors for equipment positioning
+      operationId: listSpatialAnchors
+      parameters:
+        - name: platform
+          in: query
+          schema:
+            type: string
+            enum: [hololens, quest, ios, android]
+      responses:
+        '200':
+          description: Spatial anchors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SpatialAnchor'
+    post:
+      tags: [Unity]
+      summary: Create Spatial Anchor
+      description: Create a new AR/VR spatial anchor
+      operationId: createSpatialAnchor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SpatialAnchorCreate'
+      responses:
+        '201':
+          description: Anchor created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SpatialAnchor'
+
+  # ===========================================================================
+  # ROBOTIC ARM SCHEDULING (ISO 10218 / ISO/TS 15066)
+  # ===========================================================================
+  /api/robotics/arms:
+    get:
+      tags: [Robotic Arms]
+      summary: List Robotic Arms
+      description: Get all registered robotic arms with current state
+      operationId: listRoboticArms
+      responses:
+        '200':
+          description: Robotic arms
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RoboticArm'
+
+  /api/robotics/arms/{id}/tasks:
+    get:
+      tags: [Robotic Arms]
+      summary: List Arm Tasks
+      description: Get task queue for a robotic arm
+      operationId: listArmTasks
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, queued, executing, paused, completed, failed, cancelled]
+      responses:
+        '200':
+          description: Task queue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/RobotTask'
+    post:
+      tags: [Robotic Arms]
+      summary: Queue Task
+      description: Add a new task to the robotic arm queue
+      operationId: queueArmTask
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RobotTaskCreate'
+      responses:
+        '201':
+          description: Task queued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RobotTask'
+
+  /api/robotics/arms/{id}/command:
+    post:
+      tags: [Robotic Arms]
+      summary: Send Immediate Command
+      description: Send immediate command to robotic arm (bypasses queue)
+      operationId: commandArm
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ArmCommand'
+      responses:
+        '200':
+          description: Command executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommandResult'
+
+  /api/robotics/synchronized-motion:
+    post:
+      tags: [Robotic Arms]
+      summary: Create Synchronized Motion
+      description: Coordinate multiple robotic arms for synchronized motion
+      operationId: createSynchronizedMotion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SynchronizedMotionCreate'
+      responses:
+        '201':
+          description: Synchronized motion created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SynchronizedMotion'
+
+  /api/robotics/synchronized-motion/{id}/status:
+    get:
+      tags: [Robotic Arms]
+      summary: Get Sync Motion Status
+      description: Get status of synchronized motion including arm readiness
+      operationId: getSyncMotionStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Motion status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SynchronizedMotion'
+
+  /api/robotics/safety-zones:
+    get:
+      tags: [Robotic Arms]
+      summary: List Safety Zones
+      description: Get ISO 10218 compliant safety zones
+      operationId: listSafetyZones
+      responses:
+        '200':
+          description: Safety zones
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SafetyZone'
+    post:
+      tags: [Robotic Arms]
+      summary: Create Safety Zone
+      description: Define a new safety zone with collision detection
+      operationId: createSafetyZone
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SafetyZoneCreate'
+      responses:
+        '201':
+          description: Zone created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SafetyZone'
+
+  /api/robotics/violations:
+    get:
+      tags: [Robotic Arms]
+      summary: List Zone Violations
+      description: Get safety zone violation events
+      operationId: listZoneViolations
+      parameters:
+        - name: severity
+          in: query
+          schema:
+            type: string
+            enum: [warning, critical, emergency_stop]
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: Violations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ZoneViolation'
+
+  # ===========================================================================
+  # VR TRAINING
+  # ===========================================================================
+  /api/vr/training/scenarios:
+    get:
+      tags: [VR Training]
+      summary: List Training Scenarios
+      description: Get available VR training scenarios
+      operationId: listTrainingScenarios
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [equipment_operation, safety_procedures, quality_inspection, maintenance]
+      responses:
+        '200':
+          description: Training scenarios
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/VRTrainingScenario'
+    post:
+      tags: [VR Training]
+      summary: Create Training Scenario
+      description: Create a new VR training scenario
+      operationId: createTrainingScenario
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VRTrainingScenarioCreate'
+      responses:
+        '201':
+          description: Scenario created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VRTrainingScenario'
+
+  /api/vr/training/sessions:
+    post:
+      tags: [VR Training]
+      summary: Start Training Session
+      description: Start a new VR training session
+      operationId: startTrainingSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scenario_id, trainee_id]
+              properties:
+                scenario_id:
+                  type: string
+                trainee_id:
+                  type: string
+                device_type:
+                  type: string
+                  enum: [quest, vive, hololens, desktop]
+      responses:
+        '201':
+          description: Session started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VRTrainingSession'
+
+  /api/vr/training/sessions/{id}:
+    get:
+      tags: [VR Training]
+      summary: Get Session Status
+      description: Get current status of a training session
+      operationId: getTrainingSession
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VRTrainingSession'
+
+  /api/vr/training/sessions/{id}/complete:
+    post:
+      tags: [VR Training]
+      summary: Complete Training Session
+      description: End a training session and submit results
+      operationId: completeTrainingSession
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TrainingSessionComplete'
+      responses:
+        '200':
+          description: Session completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VRTrainingResult'
+
+  /api/vr/training/leaderboard:
+    get:
+      tags: [VR Training]
+      summary: Get Leaderboard
+      description: Get training performance leaderboard
+      operationId: getTrainingLeaderboard
+      parameters:
+        - name: scenario_id
+          in: query
+          schema:
+            type: string
+        - name: period
+          in: query
+          schema:
+            type: string
+            enum: [7d, 30d, 90d, all]
+            default: 30d
+      responses:
+        '200':
+          description: Leaderboard
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrainingLeaderboard'
+
+  # ===========================================================================
+  # QUALITY HEATMAP & 3D DEFECT MAPPING
+  # ===========================================================================
+  /api/quality/heatmap:
+    get:
+      tags: [Quality Heatmap]
+      summary: List Quality Heatmaps
+      description: Get list of generated quality heatmaps
+      operationId: listQualityHeatmaps
+      parameters:
+        - name: equipment_id
+          in: query
+          schema:
+            type: string
+        - name: part_id
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Heatmaps
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/QualityHeatmap'
+    post:
+      tags: [Quality Heatmap]
+      summary: Generate Quality Heatmap
+      description: Generate a new 3D quality heatmap from inspection data
+      operationId: generateQualityHeatmap
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HeatmapGenerateRequest'
+      responses:
+        '202':
+          description: Generation started
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  task_id:
+                    type: string
+                  status:
+                    type: string
+
+  /api/quality/heatmap/{id}:
+    get:
+      tags: [Quality Heatmap]
+      summary: Get Heatmap Data
+      description: Get 3D heatmap data for Unity visualization
+      operationId: getQualityHeatmap
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: resolution
+          in: query
+          schema:
+            type: string
+            enum: [high, medium, low]
+            default: medium
+      responses:
+        '200':
+          description: Heatmap data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QualityHeatmapData'
+
+  /api/quality/defects/3d-map:
+    post:
+      tags: [Quality Heatmap]
+      summary: Map Defects to 3D
+      description: Map 2D defect detections to 3D coordinates
+      operationId: mapDefectsTo3D
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DefectMappingRequest'
+      responses:
+        '200':
+          description: 3D defect positions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Defect3DMapping'
+
+  /api/quality/defects/clusters:
+    get:
+      tags: [Quality Heatmap]
+      summary: Get Defect Clusters
+      description: Get clustered defect analysis for root cause identification
+      operationId: getDefectClusters
+      parameters:
+        - name: part_id
+          in: query
+          schema:
+            type: string
+        - name: min_cluster_size
+          in: query
+          schema:
+            type: integer
+            default: 3
+      responses:
+        '200':
+          description: Defect clusters
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/DefectCluster'
+
+  # ===========================================================================
+  # SUPPLY CHAIN DIGITAL TWIN
+  # ===========================================================================
+  /api/supply-chain-twin/network:
+    get:
+      tags: [Supply Chain Twin]
+      summary: Get Supply Chain Network
+      description: Get complete supply chain network as digital twin
+      operationId: getSupplyChainNetwork
+      responses:
+        '200':
+          description: Network topology
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupplyChainNetwork'
+
+  /api/supply-chain-twin/nodes:
+    get:
+      tags: [Supply Chain Twin]
+      summary: List Supply Chain Nodes
+      description: Get all nodes (suppliers, warehouses, plants) in supply chain
+      operationId: listSupplyChainNodes
+      parameters:
+        - name: node_type
+          in: query
+          schema:
+            type: string
+            enum: [supplier, warehouse, distribution_center, plant, customer]
+      responses:
+        '200':
+          description: Nodes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SupplyChainNode'
+    post:
+      tags: [Supply Chain Twin]
+      summary: Add Supply Chain Node
+      description: Add a new node to the supply chain network
+      operationId: addSupplyChainNode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SupplyChainNodeCreate'
+      responses:
+        '201':
+          description: Node created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupplyChainNode'
+
+  /api/supply-chain-twin/simulate/disruption:
+    post:
+      tags: [Supply Chain Twin]
+      summary: Simulate Disruption
+      description: Simulate supply chain disruption and analyze impact
+      operationId: simulateDisruption
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DisruptionSimulationRequest'
+      responses:
+        '200':
+          description: Simulation results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DisruptionSimulationResult'
+
+  /api/supply-chain-twin/risk/propagation:
+    get:
+      tags: [Supply Chain Twin]
+      summary: Analyze Risk Propagation
+      description: Analyze how risks propagate through supply chain
+      operationId: analyzeRiskPropagation
+      parameters:
+        - name: source_node_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: risk_type
+          in: query
+          schema:
+            type: string
+            enum: [supplier_failure, logistics_delay, quality_issue, demand_spike]
+      responses:
+        '200':
+          description: Risk propagation analysis
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskPropagationAnalysis'
+
+  /api/supply-chain-twin/flow/visualize:
+    get:
+      tags: [Supply Chain Twin]
+      summary: Get Material Flow Visualization
+      description: Get material flow data for Unity visualization
+      operationId: getMaterialFlowVisualization
+      parameters:
+        - name: material_id
+          in: query
+          schema:
+            type: string
+        - name: timeframe
+          in: query
+          schema:
+            type: string
+            enum: [1d, 7d, 30d]
+            default: 7d
+      responses:
+        '200':
+          description: Flow visualization data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MaterialFlowVisualization'
+
+  # ===========================================================================
+  # SUPPLY CHAIN
+  # ===========================================================================
+  /api/supply-chain/suppliers:
+    get:
+      tags: [Supply Chain]
+      summary: List Suppliers
+      description: Get list of suppliers
+      operationId: listSuppliers
+      responses:
+        '200':
+          description: Suppliers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Supplier'
+
+  /api/supply-chain/suppliers/{id}/scorecard:
+    get:
+      tags: [Supply Chain]
+      summary: Supplier Scorecard
+      description: Get supplier performance scorecard
+      operationId: getSupplierScorecard
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Scorecard
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SupplierScorecard'
+
+  /api/supply-chain/risk/matrix:
+    get:
+      tags: [Supply Chain]
+      summary: Risk Matrix
+      description: Get supply chain risk matrix
+      operationId: getRiskMatrix
+      responses:
+        '200':
+          description: Risk matrix
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RiskMatrix'
+
+  # ===========================================================================
+  # EDGE/IIoT
+  # ===========================================================================
+  /api/edge/iiot/devices:
+    get:
+      tags: [Edge/IIoT]
+      summary: List Devices
+      description: Get list of IIoT devices
+      operationId: listDevices
+      responses:
+        '200':
+          description: Devices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/IIoTDevice'
+    post:
+      tags: [Edge/IIoT]
+      summary: Register Device
+      description: Register a new IIoT device
+      operationId: registerDevice
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DeviceRegister'
+      responses:
+        '201':
+          description: Device registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IIoTDevice'
+
+  /api/edge/iiot/data:
+    post:
+      tags: [Edge/IIoT]
+      summary: Ingest Data
+      description: Ingest data point from device
+      operationId: ingestData
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DataIngest'
+      responses:
+        '200':
+          description: Data ingested
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  # ===========================================================================
+  # EVENTS (SSE)
+  # ===========================================================================
+  /api/events/stream:
+    get:
+      tags: [Events]
+      summary: Event Stream
+      description: Server-Sent Events stream for real-time updates
+      operationId: eventStream
+      responses:
+        '200':
+          description: SSE stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
+components:
+  schemas:
+    # =========================================================================
+    # COMMON
+    # =========================================================================
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+        details:
+          type: object
+
+    # =========================================================================
+    # HEALTH
+    # =========================================================================
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, unhealthy]
+        version:
+          type: string
+        platform:
+          type: string
+        services:
+          type: object
+          additionalProperties:
+            type: string
+        modules:
+          type: object
+          additionalProperties:
+            type: boolean
+
+    StatusResponse:
+      type: object
+      properties:
+        fusion360:
+          $ref: '#/components/schemas/ServiceStatus'
+        slicer:
+          $ref: '#/components/schemas/ServiceStatus'
+        redis:
+          $ref: '#/components/schemas/ServiceStatus'
+
+    ServiceStatus:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [connected, disconnected, error]
+        latency_ms:
+          type: number
+        version:
+          type: string
+        last_check:
+          type: string
+          format: date-time
+
+    # =========================================================================
+    # CATALOG
+    # =========================================================================
+    CatalogResponse:
+      type: object
+      properties:
+        bricks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Brick'
+        total:
+          type: integer
+        offset:
+          type: integer
+        limit:
+          type: integer
+
+    Brick:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        category:
+          type: string
+        studs_x:
+          type: integer
+        studs_y:
+          type: integer
+        height_plates:
+          type: integer
+        dimensions:
+          $ref: '#/components/schemas/Dimensions'
+        thumbnail:
+          type: string
+        description:
+          type: string
+
+    Category:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        count:
+          type: integer
+        icon:
+          type: string
+
+    Dimensions:
+      type: object
+      properties:
+        width_mm:
+          type: number
+        depth_mm:
+          type: number
+        height_mm:
+          type: number
+        volume_mm3:
+          type: number
+        weight_g:
+          type: number
+
+    # =========================================================================
+    # BRICK CREATION
+    # =========================================================================
+    BrickCreateRequest:
+      type: object
+      required:
+        - width_studs
+        - depth_studs
+      properties:
+        name:
+          type: string
+          default: custom_brick
+        width_studs:
+          type: integer
+          minimum: 1
+          maximum: 16
+        depth_studs:
+          type: integer
+          minimum: 1
+          maximum: 16
+        height_plates:
+          type: integer
+          minimum: 1
+          default: 3
+        brick_type:
+          type: string
+          enum: [standard, plate, tile, slope, technic, round, arch]
+          default: standard
+        hollow:
+          type: boolean
+          default: true
+        studs:
+          type: boolean
+          default: true
+        tubes:
+          type: boolean
+          default: true
+        slope_angle:
+          type: integer
+          enum: [33, 45, 65]
+        slope_direction:
+          type: string
+          enum: [front, back, left, right]
+        technic_holes:
+          type: boolean
+          default: false
+        chamfers:
+          type: boolean
+          default: false
+
+    BrickCreateResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        brick_id:
+          type: string
+        component_name:
+          type: string
+        dimensions:
+          $ref: '#/components/schemas/Dimensions'
+        volume_mm3:
+          type: number
+
+    BrickValidateRequest:
+      type: object
+      properties:
+        width_studs:
+          type: integer
+        depth_studs:
+          type: integer
+        height_plates:
+          type: integer
+        brick_type:
+          type: string
+        features:
+          type: object
+
+    ValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        warnings:
+          type: array
+          items:
+            type: string
+
+    BrickPreset:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        params:
+          $ref: '#/components/schemas/BrickCreateRequest'
+
+    ExportResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        path:
+          type: string
+        size_kb:
+          type: number
+        triangle_count:
+          type: integer
+
+    # =========================================================================
+    # MES
+    # =========================================================================
+    WorkOrder:
+      type: object
+      properties:
+        id:
+          type: string
+        part_id:
+          type: string
+        part_name:
+          type: string
+        quantity:
+          type: integer
+        completed_qty:
+          type: integer
+        scrap_qty:
+          type: integer
+        status:
+          type: string
+          enum: [planned, released, in_progress, completed, cancelled]
+        priority:
+          type: string
+          enum: [low, medium, high, urgent]
+        work_center:
+          type: string
+        due_date:
+          type: string
+          format: date-time
+        start_date:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+
+    WorkOrderCreate:
+      type: object
+      required:
+        - part_id
+        - quantity
+      properties:
+        part_id:
+          type: string
+        quantity:
+          type: integer
+        priority:
+          type: string
+          enum: [low, medium, high, urgent]
+          default: medium
+        due_date:
+          type: string
+          format: date-time
+        work_center:
+          type: string
+
+    OEEMetrics:
+      type: object
+      properties:
+        work_center:
+          type: string
+        period:
+          type: string
+        oee:
+          type: number
+          description: Overall Equipment Effectiveness (%)
+        availability:
+          type: number
+        performance:
+          type: number
+        quality:
+          type: number
+        targets:
+          type: object
+          properties:
+            oee:
+              type: number
+            availability:
+              type: number
+            performance:
+              type: number
+            quality:
+              type: number
+
+    ShopFloorDashboard:
+      type: object
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        work_orders:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkOrder'
+        machines:
+          type: array
+          items:
+            type: object
+        andon_alerts:
+          type: array
+          items:
+            $ref: '#/components/schemas/AndonAlert'
+        shift_summary:
+          type: object
+
+    AndonBoard:
+      type: object
+      properties:
+        lines:
+          type: array
+          items:
+            type: object
+        escalation_timer:
+          type: integer
+        last_update:
+          type: string
+          format: date-time
+
+    AndonTrigger:
+      type: object
+      required:
+        - work_center_id
+        - type
+        - severity
+      properties:
+        work_center_id:
+          type: string
+        type:
+          type: string
+          enum: [quality_issue, equipment_failure, material_shortage, safety]
+        severity:
+          type: string
+          enum: [green, yellow, red]
+        message:
+          type: string
+        requires_support:
+          type: boolean
+
+    AndonAlert:
+      type: object
+      properties:
+        id:
+          type: string
+        type:
+          type: string
+        severity:
+          type: string
+        work_center:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        acknowledged:
+          type: boolean
+
+    # =========================================================================
+    # QUALITY
+    # =========================================================================
+    Inspection:
+      type: object
+      properties:
+        id:
+          type: string
+        work_order:
+          type: string
+        type:
+          type: string
+        status:
+          type: string
+          enum: [pending, in_progress, completed, failed]
+        results:
+          type: object
+        created_at:
+          type: string
+          format: date-time
+
+    InspectionCreate:
+      type: object
+      required:
+        - work_order
+        - type
+      properties:
+        work_order:
+          type: string
+        type:
+          type: string
+          enum: [incoming, in_process, final, first_article]
+        characteristics:
+          type: array
+          items:
+            type: string
+
+    SPCDataPoint:
+      type: object
+      required:
+        - chart_id
+        - value
+      properties:
+        chart_id:
+          type: string
+        value:
+          type: number
+        sample_size:
+          type: integer
+        timestamp:
+          type: string
+          format: date-time
+
+    SPCResult:
+      type: object
+      properties:
+        in_control:
+          type: boolean
+        violation:
+          type: string
+        value:
+          type: number
+        ucl:
+          type: number
+        lcl:
+          type: number
+        cl:
+          type: number
+
+    ControlChart:
+      type: object
+      properties:
+        id:
+          type: string
+        chart_type:
+          type: string
+          enum: [x_bar_r, x_bar_s, p, np, c, u, ewma, cusum]
+        part_id:
+          type: string
+        characteristic:
+          type: string
+        specification:
+          type: object
+        control_limits:
+          type: object
+        data_points:
+          type: array
+          items:
+            type: object
+        status:
+          type: string
+          enum: [in_control, warning, out_of_control]
+
+    ProcessCapability:
+      type: object
+      properties:
+        cp:
+          type: number
+        cpk:
+          type: number
+        pp:
+          type: number
+        ppk:
+          type: number
+        cpm:
+          type: number
+
+    VisionDetectionResult:
+      type: object
+      properties:
+        detections:
+          type: array
+          items:
+            type: object
+            properties:
+              class:
+                type: string
+              confidence:
+                type: number
+              bbox:
+                type: array
+                items:
+                  type: number
+        defect_count:
+          type: integer
+        inference_time_ms:
+          type: number
+        model:
+          type: string
+
+    LayerInspectRequest:
+      type: object
+      required:
+        - image_path
+        - layer_number
+      properties:
+        image_path:
+          type: string
+        layer_number:
+          type: integer
+        expected_height_mm:
+          type: number
+
+    LayerInspectResult:
+      type: object
+      properties:
+        pass:
+          type: boolean
+        layer_number:
+          type: integer
+        issues:
+          type: array
+          items:
+            type: object
+        quality_score:
+          type: number
+
+    FMEACreate:
+      type: object
+      required:
+        - product_id
+        - name
+      properties:
+        product_id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+          enum: [design, process, system]
+
+    FMEA:
+      type: object
+      properties:
+        id:
+          type: string
+        product_id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        failure_modes:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              description:
+                type: string
+              severity:
+                type: integer
+                minimum: 1
+                maximum: 10
+              occurrence:
+                type: integer
+                minimum: 1
+                maximum: 10
+              detection:
+                type: integer
+                minimum: 1
+                maximum: 10
+              rpn:
+                type: integer
+              recommended_actions:
+                type: array
+                items:
+                  type: string
+        summary:
+          type: object
+
+    QualityPredictRequest:
+      type: object
+      required:
+        - work_order
+      properties:
+        work_order:
+          type: string
+        process_params:
+          type: object
+
+    QualityPrediction:
+      type: object
+      properties:
+        predicted_quality:
+          type: number
+        defect_probability:
+          type: number
+        risk_factors:
+          type: array
+          items:
+            type: object
+        recommendations:
+          type: array
+          items:
+            type: string
+
+    # =========================================================================
+    # ERP
+    # =========================================================================
+    BOM:
+      type: object
+      properties:
+        part_id:
+          type: string
+        part_name:
+          type: string
+        revision:
+          type: string
+        components:
+          type: array
+          items:
+            type: object
+            properties:
+              part_id:
+                type: string
+              quantity:
+                type: number
+              unit:
+                type: string
+              find_number:
+                type: integer
+
+    ExplodedBOM:
+      type: object
+      properties:
+        part_id:
+          type: string
+        levels:
+          type: array
+          items:
+            type: object
+        total_components:
+          type: integer
+
+    CustomerOrder:
+      type: object
+      properties:
+        id:
+          type: string
+        customer_id:
+          type: string
+        customer_name:
+          type: string
+        status:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+        total_amount:
+          type: number
+        created_at:
+          type: string
+          format: date-time
+
+    OrderCreate:
+      type: object
+      required:
+        - customer_id
+        - items
+      properties:
+        customer_id:
+          type: string
+        items:
+          type: array
+          items:
+            type: object
+            properties:
+              part_id:
+                type: string
+              quantity:
+                type: integer
+              unit_price:
+                type: number
+        shipping_address:
+          type: object
+        payment_terms:
+          type: string
+
+    ATPResult:
+      type: object
+      properties:
+        available:
+          type: boolean
+        available_qty:
+          type: integer
+        available_date:
+          type: string
+          format: date
+
+    CTPResult:
+      type: object
+      properties:
+        capable:
+          type: boolean
+        promise_date:
+          type: string
+          format: date
+        capacity_required:
+          type: number
+        materials_available:
+          type: boolean
+
+    # =========================================================================
+    # SCHEDULING
+    # =========================================================================
+    ScheduleOptimizeRequest:
+      type: object
+      required:
+        - work_orders
+      properties:
+        work_orders:
+          type: array
+          items:
+            type: string
+        objective:
+          type: string
+          enum: [makespan, tardiness, setup_time]
+          default: makespan
+        time_limit_seconds:
+          type: integer
+          default: 60
+
+    ScheduleResult:
+      type: object
+      properties:
+        schedule:
+          type: array
+          items:
+            type: object
+        makespan:
+          type: number
+        computation_time_ms:
+          type: number
+        optimal:
+          type: boolean
+
+    MultiObjectiveRequest:
+      type: object
+      required:
+        - work_orders
+        - objectives
+      properties:
+        work_orders:
+          type: array
+          items:
+            type: string
+        objectives:
+          type: array
+          items:
+            type: string
+        population_size:
+          type: integer
+          default: 100
+        generations:
+          type: integer
+          default: 50
+
+    ParetoResult:
+      type: object
+      properties:
+        solutions:
+          type: array
+          items:
+            type: object
+        pareto_front:
+          type: array
+          items:
+            type: object
+        computation_time_ms:
+          type: number
+
+    RLDispatchRequest:
+      type: object
+      required:
+        - state
+      properties:
+        state:
+          type: object
+        available_jobs:
+          type: array
+          items:
+            type: string
+        work_center:
+          type: string
+
+    DispatchResult:
+      type: object
+      properties:
+        action:
+          type: string
+        job_id:
+          type: string
+        confidence:
+          type: number
+        q_values:
+          type: object
+
+    GanttData:
+      type: object
+      properties:
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        work_centers:
+          type: array
+          items:
+            type: object
+        operations:
+          type: array
+          items:
+            type: object
+
+    # =========================================================================
+    # AI COPILOT
+    # =========================================================================
+    AIAskRequest:
+      type: object
+      required:
+        - question
+      properties:
+        question:
+          type: string
+        include_context:
+          type: boolean
+          default: true
+        model:
+          type: string
+        explain:
+          type: boolean
+          default: false
+
+    AIAskResponse:
+      type: object
+      properties:
+        answer:
+          type: string
+        confidence:
+          type: number
+        sources:
+          type: array
+          items:
+            type: object
+        xai:
+          type: object
+          properties:
+            feature_importance:
+              type: array
+              items:
+                type: object
+            counterfactual:
+              type: string
+            explanation_method:
+              type: string
+
+    ManufacturingContext:
+      type: object
+      properties:
+        production_context:
+          type: object
+        quality_context:
+          type: object
+        supply_chain_context:
+          type: object
+        maintenance_context:
+          type: object
+        recommendations:
+          type: array
+          items:
+            type: object
+
+    ExplainRequest:
+      type: object
+      required:
+        - anomaly_id
+      properties:
+        anomaly_id:
+          type: string
+        method:
+          type: string
+          enum: [shap, lime, counterfactual]
+
+    ExplainResponse:
+      type: object
+      properties:
+        explanation:
+          type: string
+        feature_importance:
+          type: array
+          items:
+            type: object
+        counterfactual:
+          type: string
+        confidence:
+          type: number
+
+    # =========================================================================
+    # SUSTAINABILITY
+    # =========================================================================
+    CarbonFootprintRequest:
+      type: object
+      required:
+        - work_order
+      properties:
+        work_order:
+          type: string
+        include_scope3:
+          type: boolean
+          default: true
+
+    CarbonFootprint:
+      type: object
+      properties:
+        total_kg_co2e:
+          type: number
+        scope1:
+          type: number
+        scope2:
+          type: number
+        scope3:
+          type: number
+        breakdown:
+          type: object
+
+    LCAImpact:
+      type: object
+      properties:
+        part_id:
+          type: string
+        functional_unit:
+          type: string
+        impact_categories:
+          type: object
+          properties:
+            gwp:
+              type: object
+            energy:
+              type: object
+            water:
+              type: object
+        circular_economy:
+          type: object
+
+    CircularMetrics:
+      type: object
+      properties:
+        material_circularity_index:
+          type: number
+        metrics:
+          type: object
+        material_flows:
+          type: object
+        improvement_opportunities:
+          type: array
+          items:
+            type: object
+
+    # =========================================================================
+    # COMPLIANCE
+    # =========================================================================
+    AuditEntry:
+      type: object
+      properties:
+        id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        user:
+          type: string
+        action:
+          type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        old_value:
+          type: object
+        new_value:
+          type: object
+        ip_address:
+          type: string
+
+    AuditEntryCreate:
+      type: object
+      required:
+        - action
+        - resource_type
+        - resource_id
+      properties:
+        action:
+          type: string
+        resource_type:
+          type: string
+        resource_id:
+          type: string
+        details:
+          type: object
+
+    SignatureRequest:
+      type: object
+      required:
+        - document_id
+        - document_type
+        - meaning
+      properties:
+        document_id:
+          type: string
+        document_type:
+          type: string
+        meaning:
+          type: string
+          enum: [approved, reviewed, authored, witnessed]
+        pin:
+          type: string
+
+    SignatureResponse:
+      type: object
+      properties:
+        signature_id:
+          type: string
+        document_id:
+          type: string
+        signer:
+          type: string
+        meaning:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        hash:
+          type: string
+        valid:
+          type: boolean
+
+    ISOStatus:
+      type: object
+      properties:
+        standard:
+          type: string
+        overall_compliance:
+          type: number
+        last_audit:
+          type: string
+          format: date
+        next_audit:
+          type: string
+          format: date
+        clauses:
+          type: array
+          items:
+            type: object
+        findings_summary:
+          type: object
+
+    CAPA:
+      type: object
+      properties:
+        capa_id:
+          type: string
+        type:
+          type: string
+          enum: [corrective, preventive]
+        status:
+          type: string
+        priority:
+          type: string
+        source:
+          type: string
+        problem_description:
+          type: string
+        workflow:
+          type: object
+
+    # =========================================================================
+    # DIGITAL TWIN
+    # =========================================================================
+    TwinState:
+      type: object
+      properties:
+        asset_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        status:
+          type: string
+        metrics:
+          type: object
+        sensor_data:
+          type: object
+
+    MaintenancePrediction:
+      type: object
+      properties:
+        asset_id:
+          type: string
+        rul_hours:
+          type: number
+        rul_cycles:
+          type: integer
+        confidence:
+          type: number
+        risk_level:
+          type: string
+          enum: [low, medium, high, critical]
+        recommended_action:
+          type: string
+        next_maintenance:
+          type: string
+          format: date
+
+    # =========================================================================
+    # SUPPLY CHAIN
+    # =========================================================================
+    Supplier:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        location:
+          type: object
+        status:
+          type: string
+        risk_score:
+          type: number
+        lead_time_days:
+          type: integer
+        on_time_delivery:
+          type: number
+        quality_rating:
+          type: number
+
+    SupplierScorecard:
+      type: object
+      properties:
+        supplier_id:
+          type: string
+        period:
+          type: string
+        overall_score:
+          type: number
+        dimensions:
+          type: object
+          properties:
+            quality:
+              type: number
+            delivery:
+              type: number
+            cost:
+              type: number
+            responsiveness:
+              type: number
+        trend:
+          type: string
+
+    RiskMatrix:
+      type: object
+      properties:
+        matrix:
+          type: object
+        summary:
+          type: object
+        top_risks:
+          type: array
+          items:
+            type: object
+
+    # =========================================================================
+    # EDGE/IIoT
+    # =========================================================================
+    IIoTDevice:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        protocol:
+          type: string
+          enum: [mqtt, opcua, modbus, http]
+        status:
+          type: string
+          enum: [online, offline, error]
+        last_seen:
+          type: string
+          format: date-time
+        metrics:
+          type: object
+
+    DeviceRegister:
+      type: object
+      required:
+        - name
+        - type
+        - protocol
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+        protocol:
+          type: string
+        connection_string:
+          type: string
+        polling_interval_ms:
+          type: integer
+
+    DataIngest:
+      type: object
+      required:
+        - device_id
+        - data
+      properties:
+        device_id:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+
+    # =========================================================================
+    # ISO 23247 - OBSERVABLE MANUFACTURING ELEMENTS
+    # =========================================================================
+    ObservableManufacturingElement:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        ome_type:
+          type: string
+          enum: [factory, production_line, work_cell, equipment, sensor, actuator, tool, fixture]
+        name:
+          type: string
+        description:
+          type: string
+        namespace:
+          type: string
+          default: default
+        parent_id:
+          type: string
+          format: uuid
+        lifecycle_state:
+          type: string
+          enum: [design, commissioning, active, maintenance, degraded, standby, offline, retired]
+        lifecycle_history:
+          type: array
+          items:
+            type: object
+            properties:
+              state:
+                type: string
+              timestamp:
+                type: string
+                format: date-time
+              reason:
+                type: string
+        static_attributes:
+          type: object
+          description: ISO 23247-3 Section 7.3.1 compliant static attributes
+          properties:
+            manufacturer:
+              type: string
+            model:
+              type: string
+            serial_number:
+              type: string
+            dimensions:
+              type: object
+            capabilities:
+              type: array
+              items:
+                type: string
+            work_envelope:
+              type: object
+        dynamic_attributes:
+          type: object
+          description: ISO 23247-3 Section 7.3.2 compliant dynamic attributes
+          properties:
+            status:
+              type: string
+            temperatures:
+              type: object
+            positions:
+              type: object
+            oee:
+              type: number
+            health_score:
+              type: number
+        behavior_model:
+          type: object
+          properties:
+            model_type:
+              type: string
+              enum: [pinn, hybrid, rules, ml]
+            model_id:
+              type: string
+            parameters:
+              type: object
+            predictions_enabled:
+              type: boolean
+        geometry_3d:
+          type: object
+          properties:
+            model_url:
+              type: string
+            position:
+              $ref: '#/components/schemas/Vector3'
+            rotation:
+              $ref: '#/components/schemas/Vector3'
+            scale:
+              $ref: '#/components/schemas/Vector3'
+            color:
+              type: string
+            material:
+              type: string
+        relationships:
+          type: array
+          items:
+            type: object
+            properties:
+              type:
+                type: string
+              target_id:
+                type: string
+        tags:
+          type: array
+          items:
+            type: string
+        version:
+          type: integer
+        sync_status:
+          type: string
+          enum: [synced, pending, conflict, offline]
+        last_sync_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    OMECreate:
+      type: object
+      required:
+        - ome_type
+        - name
+      properties:
+        ome_type:
+          type: string
+          enum: [factory, production_line, work_cell, equipment, sensor, actuator, tool, fixture]
+        name:
+          type: string
+        description:
+          type: string
+        namespace:
+          type: string
+          default: default
+        parent_id:
+          type: string
+          format: uuid
+        static_attributes:
+          type: object
+        geometry_3d:
+          type: object
+        tags:
+          type: array
+          items:
+            type: string
+
+    OMEUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        static_attributes:
+          type: object
+        dynamic_attributes:
+          type: object
+        behavior_model:
+          type: object
+        geometry_3d:
+          type: object
+        tags:
+          type: array
+          items:
+            type: string
+
+    OMEHierarchy:
+      type: object
+      properties:
+        ome:
+          $ref: '#/components/schemas/ObservableManufacturingElement'
+        children:
+          type: array
+          items:
+            $ref: '#/components/schemas/OMEHierarchy'
+        depth:
+          type: integer
+        total_descendants:
+          type: integer
+
+    DigitalTwinInstance:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        ome_id:
+          type: string
+          format: uuid
+        twin_type:
+          type: string
+          enum: [monitoring, simulation, predictive, optimization, training]
+        state:
+          type: string
+          enum: [initializing, syncing, active, paused, simulating, error, stopped]
+        sync_mode:
+          type: string
+          enum: [realtime, periodic, on_demand, playback]
+        sync_interval_ms:
+          type: integer
+        last_sync_at:
+          type: string
+          format: date-time
+        sync_lag_ms:
+          type: number
+        current_state:
+          type: object
+        model_type:
+          type: string
+        model_parameters:
+          type: object
+        predictions:
+          type: object
+        updates_per_second:
+          type: number
+        total_updates:
+          type: integer
+        error_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        version:
+          type: integer
+
+    TwinInstanceCreate:
+      type: object
+      required:
+        - twin_type
+      properties:
+        twin_type:
+          type: string
+          enum: [monitoring, simulation, predictive, optimization, training]
+        sync_mode:
+          type: string
+          enum: [realtime, periodic, on_demand, playback]
+          default: realtime
+        sync_interval_ms:
+          type: integer
+          default: 1000
+        model_type:
+          type: string
+        model_parameters:
+          type: object
+
+    ISO23247Status:
+      type: object
+      properties:
+        conformance_level:
+          type: integer
+          minimum: 0
+          maximum: 4
+          description: "0=None, 1=Basic, 2=Intermediate, 3=Advanced, 4=Full"
+        overall_score:
+          type: number
+          minimum: 0
+          maximum: 100
+        domains:
+          type: object
+          properties:
+            user_domain:
+              type: object
+              properties:
+                score:
+                  type: number
+                status:
+                  type: string
+            digital_twin_domain:
+              type: object
+              properties:
+                score:
+                  type: number
+                status:
+                  type: string
+            data_collection_domain:
+              type: object
+              properties:
+                score:
+                  type: number
+                status:
+                  type: string
+            ome_domain:
+              type: object
+              properties:
+                score:
+                  type: number
+                status:
+                  type: string
+        last_assessment:
+          type: string
+          format: date-time
+
+    ISO23247Report:
+      type: object
+      properties:
+        report_id:
+          type: string
+        generated_at:
+          type: string
+          format: date-time
+        conformance_level:
+          type: integer
+        overall_score:
+          type: number
+        requirements_status:
+          type: array
+          items:
+            type: object
+            properties:
+              requirement_id:
+                type: string
+              description:
+                type: string
+              status:
+                type: string
+                enum: [compliant, partial, non_compliant, not_applicable]
+              evidence:
+                type: string
+              gaps:
+                type: array
+                items:
+                  type: string
+        gaps_summary:
+          type: object
+          properties:
+            critical:
+              type: integer
+            major:
+              type: integer
+            minor:
+              type: integer
+        roadmap:
+          type: array
+          items:
+            type: object
+            properties:
+              phase:
+                type: string
+              actions:
+                type: array
+                items:
+                  type: string
+              priority:
+                type: string
+
+    ISO23247ValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        scope:
+          type: array
+          items:
+            type: string
+        results:
+          type: array
+          items:
+            type: object
+            properties:
+              check:
+                type: string
+              passed:
+                type: boolean
+              message:
+                type: string
+              severity:
+                type: string
+                enum: [error, warning, info]
+        summary:
+          type: object
+          properties:
+            total_checks:
+              type: integer
+            passed:
+              type: integer
+            failed:
+              type: integer
+            warnings:
+              type: integer
+
+    # =========================================================================
+    # UNITY 3D VISUALIZATION
+    # =========================================================================
+    Vector3:
+      type: object
+      properties:
+        x:
+          type: number
+        y:
+          type: number
+        z:
+          type: number
+
+    Quaternion:
+      type: object
+      properties:
+        x:
+          type: number
+        y:
+          type: number
+        z:
+          type: number
+        w:
+          type: number
+
+    UnitySceneState:
+      type: object
+      properties:
+        scene_id:
+          type: string
+        namespace:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        equipment:
+          type: array
+          items:
+            $ref: '#/components/schemas/UnityEquipment'
+        camera_presets:
+          type: array
+          items:
+            $ref: '#/components/schemas/CameraPreset'
+        visualization_settings:
+          type: object
+          properties:
+            lighting:
+              type: object
+            materials:
+              type: object
+            lod_settings:
+              type: object
+        flow_paths:
+          type: array
+          items:
+            type: object
+        annotations:
+          type: array
+          items:
+            type: object
+
+    UnitySceneDelta:
+      type: object
+      properties:
+        since:
+          type: string
+          format: date-time
+        until:
+          type: string
+          format: date-time
+        changes:
+          type: array
+          items:
+            type: object
+            properties:
+              equipment_id:
+                type: string
+              change_type:
+                type: string
+                enum: [added, modified, removed]
+              property:
+                type: string
+              old_value:
+                type: object
+              new_value:
+                type: object
+        events:
+          type: array
+          items:
+            type: object
+
+    UnityEquipment:
+      type: object
+      properties:
+        id:
+          type: string
+        ome_id:
+          type: string
+        name:
+          type: string
+        equipment_type:
+          type: string
+        model_url:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vector3'
+        rotation:
+          $ref: '#/components/schemas/Vector3'
+        scale:
+          $ref: '#/components/schemas/Vector3'
+        color:
+          type: string
+        material:
+          type: string
+        status:
+          type: string
+        oee:
+          type: number
+        current_job:
+          type: string
+        animations:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              playing:
+                type: boolean
+              speed:
+                type: number
+        sensor_data:
+          type: object
+        last_update:
+          type: string
+          format: date-time
+
+    CameraPreset:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vector3'
+        rotation:
+          $ref: '#/components/schemas/Vector3'
+        field_of_view:
+          type: number
+        is_default:
+          type: boolean
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    SpatialAnchor:
+      type: object
+      properties:
+        id:
+          type: string
+        anchor_id:
+          type: string
+        ome_id:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vector3'
+        rotation:
+          $ref: '#/components/schemas/Quaternion'
+        platform:
+          type: string
+          enum: [hololens, quest, ios, android]
+        platform_anchor_data:
+          type: object
+        is_valid:
+          type: boolean
+        last_validated:
+          type: string
+          format: date-time
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    SpatialAnchorCreate:
+      type: object
+      required:
+        - anchor_id
+        - position
+        - platform
+      properties:
+        anchor_id:
+          type: string
+        ome_id:
+          type: string
+        position:
+          $ref: '#/components/schemas/Vector3'
+        rotation:
+          $ref: '#/components/schemas/Quaternion'
+        platform:
+          type: string
+          enum: [hololens, quest, ios, android]
+        platform_anchor_data:
+          type: object
+
+    # =========================================================================
+    # ROBOTIC ARM SCHEDULING
+    # =========================================================================
+    RoboticArm:
+      type: object
+      properties:
+        id:
+          type: string
+        ome_id:
+          type: string
+        name:
+          type: string
+        arm_type:
+          type: string
+          enum: [6dof, scara, delta, cartesian, collaborative]
+        manufacturer:
+          type: string
+        model:
+          type: string
+        status:
+          type: string
+          enum: [idle, executing, paused, error, maintenance, offline]
+        current_task_id:
+          type: string
+        joint_positions:
+          type: array
+          items:
+            type: number
+        tcp_position:
+          $ref: '#/components/schemas/Vector3'
+        tcp_rotation:
+          $ref: '#/components/schemas/Quaternion'
+        velocity_percent:
+          type: number
+        payload_kg:
+          type: number
+        reach_mm:
+          type: number
+        safety_mode:
+          type: string
+          enum: [normal, reduced, protective_stop, emergency_stop]
+        queue_length:
+          type: integer
+        last_calibration:
+          type: string
+          format: date-time
+
+    RobotTask:
+      type: object
+      properties:
+        id:
+          type: string
+        arm_id:
+          type: string
+        task_type:
+          type: string
+          enum: [move_joint, move_linear, pick, place, home, calibrate, synchronized, custom]
+        priority:
+          type: string
+          enum: [low, normal, high, critical]
+        parameters:
+          type: object
+        status:
+          type: string
+          enum: [pending, queued, executing, paused, completed, failed, cancelled]
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
+        scheduled_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        estimated_duration_ms:
+          type: number
+        actual_duration_ms:
+          type: number
+        trajectory_id:
+          type: string
+        waypoint_count:
+          type: integer
+        current_waypoint:
+          type: integer
+        velocity_limit_percent:
+          type: number
+        force_limit_n:
+          type: number
+        collision_detection_enabled:
+          type: boolean
+        sync_motion_id:
+          type: string
+        error_code:
+          type: string
+        error_message:
+          type: string
+        retry_count:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+
+    RobotTaskCreate:
+      type: object
+      required:
+        - task_type
+      properties:
+        task_type:
+          type: string
+          enum: [move_joint, move_linear, pick, place, home, calibrate, synchronized, custom]
+        priority:
+          type: string
+          enum: [low, normal, high, critical]
+          default: normal
+        parameters:
+          type: object
+          description: Task-specific parameters (target position, speed, etc.)
+        scheduled_at:
+          type: string
+          format: date-time
+        velocity_limit_percent:
+          type: number
+          default: 100
+        force_limit_n:
+          type: number
+        collision_detection_enabled:
+          type: boolean
+          default: true
+        sync_motion_id:
+          type: string
+
+    ArmCommand:
+      type: object
+      required:
+        - command
+      properties:
+        command:
+          type: string
+          enum: [stop, pause, resume, home, clear_error, e_stop, reset]
+        parameters:
+          type: object
+
+    CommandResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        command:
+          type: string
+        message:
+          type: string
+        executed_at:
+          type: string
+          format: date-time
+
+    SynchronizedMotion:
+      type: object
+      properties:
+        id:
+          type: string
+        motion_id:
+          type: string
+        arm_ids:
+          type: array
+          items:
+            type: string
+        arm_count:
+          type: integer
+        sync_type:
+          type: string
+          enum: [barrier, timed, master_slave]
+        master_arm_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, waiting, executing, completed, failed, cancelled]
+        arms_ready:
+          type: integer
+        scheduled_at:
+          type: string
+          format: date-time
+        barrier_reached_at:
+          type: string
+          format: date-time
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        task_results:
+          type: object
+        success:
+          type: boolean
+
+    SynchronizedMotionCreate:
+      type: object
+      required:
+        - arm_ids
+        - tasks
+      properties:
+        arm_ids:
+          type: array
+          items:
+            type: string
+        tasks:
+          type: object
+          description: Map of arm_id to task parameters
+        sync_type:
+          type: string
+          enum: [barrier, timed, master_slave]
+          default: barrier
+        master_arm_id:
+          type: string
+        scheduled_at:
+          type: string
+          format: date-time
+
+    SafetyZone:
+      type: object
+      properties:
+        id:
+          type: string
+        zone_id:
+          type: string
+        arm_id:
+          type: string
+        zone_name:
+          type: string
+        zone_type:
+          type: string
+          enum: [restricted, reduced_speed, collaborative, stop, warning]
+        geometry_type:
+          type: string
+          enum: [box, sphere, cylinder, mesh]
+        geometry_data:
+          type: object
+        velocity_limit_percent:
+          type: number
+        force_limit_n:
+          type: number
+        stop_on_entry:
+          type: boolean
+        alarm_on_entry:
+          type: boolean
+        is_active:
+          type: boolean
+        active_schedule:
+          type: object
+        namespace:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    SafetyZoneCreate:
+      type: object
+      required:
+        - zone_id
+        - zone_name
+        - zone_type
+        - geometry_type
+        - geometry_data
+      properties:
+        zone_id:
+          type: string
+        arm_id:
+          type: string
+        zone_name:
+          type: string
+        zone_type:
+          type: string
+          enum: [restricted, reduced_speed, collaborative, stop, warning]
+        geometry_type:
+          type: string
+          enum: [box, sphere, cylinder, mesh]
+        geometry_data:
+          type: object
+        velocity_limit_percent:
+          type: number
+        force_limit_n:
+          type: number
+        stop_on_entry:
+          type: boolean
+          default: false
+        alarm_on_entry:
+          type: boolean
+          default: true
+        active_schedule:
+          type: object
+        namespace:
+          type: string
+          default: default
+
+    ZoneViolation:
+      type: object
+      properties:
+        id:
+          type: string
+        zone_id:
+          type: string
+        arm_id:
+          type: string
+        violation_type:
+          type: string
+          enum: [entry, proximity, force_exceeded, velocity_exceeded]
+        severity:
+          type: string
+          enum: [warning, critical, emergency_stop]
+        detected_at:
+          type: string
+          format: date-time
+        resolved_at:
+          type: string
+          format: date-time
+        violation_point:
+          $ref: '#/components/schemas/Vector3'
+        arm_joint_positions:
+          type: array
+          items:
+            type: number
+        action_taken:
+          type: string
+          enum: [warning_issued, speed_reduced, stopped, emergency_stop]
+        response_time_ms:
+          type: number
+        operator_acknowledged:
+          type: boolean
+        acknowledged_by:
+          type: string
+        acknowledged_at:
+          type: string
+          format: date-time
+        notes:
+          type: string
+
+    # =========================================================================
+    # VR TRAINING
+    # =========================================================================
+    VRTrainingScenario:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [equipment_operation, safety_procedures, quality_inspection, maintenance]
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced, expert]
+        duration_minutes:
+          type: integer
+        objectives:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              description:
+                type: string
+              points:
+                type: integer
+              required:
+                type: boolean
+        equipment_required:
+          type: array
+          items:
+            type: string
+        scene_config:
+          type: object
+        passing_score:
+          type: number
+        certification_valid_days:
+          type: integer
+        created_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    VRTrainingScenarioCreate:
+      type: object
+      required:
+        - name
+        - category
+        - objectives
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+          enum: [equipment_operation, safety_procedures, quality_inspection, maintenance]
+        difficulty:
+          type: string
+          enum: [beginner, intermediate, advanced, expert]
+          default: intermediate
+        duration_minutes:
+          type: integer
+        objectives:
+          type: array
+          items:
+            type: object
+            properties:
+              description:
+                type: string
+              points:
+                type: integer
+              required:
+                type: boolean
+        equipment_required:
+          type: array
+          items:
+            type: string
+        scene_config:
+          type: object
+        passing_score:
+          type: number
+          default: 70
+        certification_valid_days:
+          type: integer
+
+    VRTrainingSession:
+      type: object
+      properties:
+        id:
+          type: string
+        scenario_id:
+          type: string
+        trainee_id:
+          type: string
+        device_type:
+          type: string
+          enum: [quest, vive, hololens, desktop]
+        status:
+          type: string
+          enum: [initializing, in_progress, paused, completed, abandoned]
+        started_at:
+          type: string
+          format: date-time
+        current_objective:
+          type: integer
+        objectives_completed:
+          type: array
+          items:
+            type: string
+        current_score:
+          type: number
+        elapsed_seconds:
+          type: integer
+        interactions:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              action:
+                type: string
+              object:
+                type: string
+              result:
+                type: string
+
+    TrainingSessionComplete:
+      type: object
+      properties:
+        final_score:
+          type: number
+        objectives_completed:
+          type: array
+          items:
+            type: string
+        feedback:
+          type: string
+        interactions:
+          type: array
+          items:
+            type: object
+
+    VRTrainingResult:
+      type: object
+      properties:
+        session_id:
+          type: string
+        scenario_id:
+          type: string
+        trainee_id:
+          type: string
+        score:
+          type: number
+        passed:
+          type: boolean
+        duration_seconds:
+          type: integer
+        objectives_completed:
+          type: array
+          items:
+            type: object
+            properties:
+              objective_id:
+                type: string
+              completed:
+                type: boolean
+              points_earned:
+                type: number
+        mistakes:
+          type: array
+          items:
+            type: object
+            properties:
+              timestamp:
+                type: string
+                format: date-time
+              description:
+                type: string
+              severity:
+                type: string
+              points_deducted:
+                type: number
+        feedback:
+          type: string
+        certification_expiry:
+          type: string
+          format: date
+        completed_at:
+          type: string
+          format: date-time
+
+    TrainingLeaderboard:
+      type: object
+      properties:
+        scenario_id:
+          type: string
+        period:
+          type: string
+        entries:
+          type: array
+          items:
+            type: object
+            properties:
+              rank:
+                type: integer
+              trainee_id:
+                type: string
+              trainee_name:
+                type: string
+              score:
+                type: number
+              duration_seconds:
+                type: integer
+              completed_at:
+                type: string
+                format: date-time
+        total_participants:
+          type: integer
+
+    # =========================================================================
+    # QUALITY HEATMAP & 3D DEFECT MAPPING
+    # =========================================================================
+    QualityHeatmap:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        part_id:
+          type: string
+        equipment_id:
+          type: string
+        heatmap_type:
+          type: string
+          enum: [defect_density, dimensional_deviation, surface_quality, temperature]
+        generated_at:
+          type: string
+          format: date-time
+        data_points:
+          type: integer
+        resolution:
+          type: string
+        bounds:
+          type: object
+          properties:
+            min:
+              $ref: '#/components/schemas/Vector3'
+            max:
+              $ref: '#/components/schemas/Vector3'
+        statistics:
+          type: object
+          properties:
+            min_value:
+              type: number
+            max_value:
+              type: number
+            mean_value:
+              type: number
+            std_dev:
+              type: number
+        preview_url:
+          type: string
+
+    QualityHeatmapData:
+      type: object
+      properties:
+        id:
+          type: string
+        resolution:
+          type: string
+        grid_size:
+          type: object
+          properties:
+            x:
+              type: integer
+            y:
+              type: integer
+            z:
+              type: integer
+        voxels:
+          type: array
+          items:
+            type: object
+            properties:
+              position:
+                $ref: '#/components/schemas/Vector3'
+              value:
+                type: number
+              color:
+                type: string
+        color_scale:
+          type: object
+          properties:
+            min_color:
+              type: string
+            max_color:
+              type: string
+            min_value:
+              type: number
+            max_value:
+              type: number
+        mesh_url:
+          type: string
+          description: URL to downloadable 3D mesh file
+
+    HeatmapGenerateRequest:
+      type: object
+      required:
+        - part_id
+        - heatmap_type
+      properties:
+        part_id:
+          type: string
+        equipment_id:
+          type: string
+        heatmap_type:
+          type: string
+          enum: [defect_density, dimensional_deviation, surface_quality, temperature]
+        time_range:
+          type: object
+          properties:
+            start:
+              type: string
+              format: date-time
+            end:
+              type: string
+              format: date-time
+        resolution:
+          type: string
+          enum: [high, medium, low]
+          default: medium
+
+    DefectMappingRequest:
+      type: object
+      required:
+        - detections
+        - camera_calibration
+      properties:
+        detections:
+          type: array
+          items:
+            type: object
+            properties:
+              detection_id:
+                type: string
+              class:
+                type: string
+              bbox:
+                type: array
+                items:
+                  type: number
+              confidence:
+                type: number
+              camera_id:
+                type: string
+        camera_calibration:
+          type: object
+          description: Camera intrinsics and extrinsics for 3D projection
+        part_geometry:
+          type: object
+          description: Part 3D model reference for accurate mapping
+
+    Defect3DMapping:
+      type: object
+      properties:
+        mappings:
+          type: array
+          items:
+            type: object
+            properties:
+              detection_id:
+                type: string
+              class:
+                type: string
+              position_3d:
+                $ref: '#/components/schemas/Vector3'
+              surface_normal:
+                $ref: '#/components/schemas/Vector3'
+              confidence:
+                type: number
+              size_mm:
+                type: number
+        point_cloud_url:
+          type: string
+        mesh_overlay_url:
+          type: string
+
+    DefectCluster:
+      type: object
+      properties:
+        cluster_id:
+          type: string
+        centroid:
+          $ref: '#/components/schemas/Vector3'
+        defect_count:
+          type: integer
+        defect_types:
+          type: array
+          items:
+            type: string
+        radius_mm:
+          type: number
+        severity:
+          type: string
+          enum: [low, medium, high, critical]
+        probable_cause:
+          type: string
+        recommendations:
+          type: array
+          items:
+            type: string
+        affected_part_ids:
+          type: array
+          items:
+            type: string
+
+    # =========================================================================
+    # SUPPLY CHAIN DIGITAL TWIN
+    # =========================================================================
+    SupplyChainNetwork:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        nodes:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupplyChainNode'
+        edges:
+          type: array
+          items:
+            $ref: '#/components/schemas/SupplyChainEdge'
+        metrics:
+          type: object
+          properties:
+            total_nodes:
+              type: integer
+            total_edges:
+              type: integer
+            avg_lead_time_days:
+              type: number
+            network_resilience_score:
+              type: number
+        last_updated:
+          type: string
+          format: date-time
+
+    SupplyChainNode:
+      type: object
+      properties:
+        id:
+          type: string
+        node_type:
+          type: string
+          enum: [supplier, warehouse, distribution_center, plant, customer]
+        name:
+          type: string
+        location:
+          type: object
+          properties:
+            latitude:
+              type: number
+            longitude:
+              type: number
+            country:
+              type: string
+            city:
+              type: string
+        capacity:
+          type: object
+          properties:
+            storage_units:
+              type: integer
+            throughput_per_day:
+              type: integer
+        inventory:
+          type: object
+        lead_time_days:
+          type: number
+        reliability_score:
+          type: number
+        risk_score:
+          type: number
+        status:
+          type: string
+          enum: [active, at_risk, disrupted, offline]
+        upstream_nodes:
+          type: array
+          items:
+            type: string
+        downstream_nodes:
+          type: array
+          items:
+            type: string
+
+    SupplyChainNodeCreate:
+      type: object
+      required:
+        - node_type
+        - name
+        - location
+      properties:
+        node_type:
+          type: string
+          enum: [supplier, warehouse, distribution_center, plant, customer]
+        name:
+          type: string
+        location:
+          type: object
+          properties:
+            latitude:
+              type: number
+            longitude:
+              type: number
+            country:
+              type: string
+            city:
+              type: string
+        capacity:
+          type: object
+        lead_time_days:
+          type: number
+        upstream_nodes:
+          type: array
+          items:
+            type: string
+        downstream_nodes:
+          type: array
+          items:
+            type: string
+
+    SupplyChainEdge:
+      type: object
+      properties:
+        id:
+          type: string
+        source_node_id:
+          type: string
+        target_node_id:
+          type: string
+        transport_mode:
+          type: string
+          enum: [road, rail, air, sea, multimodal]
+        lead_time_days:
+          type: number
+        cost_per_unit:
+          type: number
+        capacity_per_day:
+          type: integer
+        reliability_score:
+          type: number
+        carbon_footprint_kg:
+          type: number
+
+    DisruptionSimulationRequest:
+      type: object
+      required:
+        - disruption_type
+        - affected_nodes
+      properties:
+        disruption_type:
+          type: string
+          enum: [supplier_failure, logistics_delay, demand_spike, natural_disaster, geopolitical]
+        affected_nodes:
+          type: array
+          items:
+            type: string
+        severity:
+          type: number
+          minimum: 0
+          maximum: 1
+        duration_days:
+          type: integer
+        simulation_horizon_days:
+          type: integer
+          default: 30
+
+    DisruptionSimulationResult:
+      type: object
+      properties:
+        simulation_id:
+          type: string
+        disruption_type:
+          type: string
+        affected_nodes:
+          type: array
+          items:
+            type: string
+        impact_summary:
+          type: object
+          properties:
+            production_loss_percent:
+              type: number
+            revenue_impact:
+              type: number
+            recovery_time_days:
+              type: integer
+        propagation_timeline:
+          type: array
+          items:
+            type: object
+            properties:
+              day:
+                type: integer
+              affected_nodes:
+                type: array
+                items:
+                  type: string
+              inventory_levels:
+                type: object
+        mitigation_options:
+          type: array
+          items:
+            type: object
+            properties:
+              strategy:
+                type: string
+              cost:
+                type: number
+              effectiveness:
+                type: number
+              implementation_time_days:
+                type: integer
+
+    RiskPropagationAnalysis:
+      type: object
+      properties:
+        source_node_id:
+          type: string
+        risk_type:
+          type: string
+        propagation_path:
+          type: array
+          items:
+            type: object
+            properties:
+              node_id:
+                type: string
+              hop_distance:
+                type: integer
+              risk_attenuation:
+                type: number
+              time_to_impact_days:
+                type: number
+        total_nodes_affected:
+          type: integer
+        critical_path:
+          type: array
+          items:
+            type: string
+        bottleneck_nodes:
+          type: array
+          items:
+            type: string
+
+    MaterialFlowVisualization:
+      type: object
+      properties:
+        material_id:
+          type: string
+        timeframe:
+          type: string
+        flows:
+          type: array
+          items:
+            type: object
+            properties:
+              source_node_id:
+                type: string
+              target_node_id:
+                type: string
+              quantity:
+                type: number
+              flow_rate_per_day:
+                type: number
+              in_transit:
+                type: number
+        animation_data:
+          type: object
+          description: Unity-compatible animation keyframes for flow visualization
+        statistics:
+          type: object
+          properties:
+            total_quantity:
+              type: number
+            avg_transit_time_days:
+              type: number
+            bottleneck_edges:
+              type: array
+              items:
+                type: string

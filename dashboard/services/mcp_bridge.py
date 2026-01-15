@@ -185,6 +185,8 @@ class MCPBridge:
         "export_stl", "export_step", "export_3mf",
         "list_brick_catalog", "get_brick_details",
         "list_printers", "list_materials", "list_machines", "list_tools",
+        # Workflow tools - end-to-end automation
+        "create_and_export", "create_and_print", "create_and_mill", "create_and_engrave",
     }
 
     @classmethod
@@ -501,6 +503,206 @@ class MCPBridge:
 
             return generate_brick_set(params.get("set_type", "basic"))
 
+        # =================================================================
+        # WORKFLOW TOOLS - End-to-end automation
+        # =================================================================
+
+        elif tool_name == "create_and_export":
+            # Workflow: Create brick -> Export to STL/3MF/STEP
+            brick_type = params.get("brick_type", "standard")
+            width = params.get("width", 2)
+            depth = params.get("depth", 4)
+            height = params.get("height_bricks", 1.0)
+            export_format = params.get("export_format", "stl")
+            name = params.get("name") or f"{brick_type}_{width}x{depth}"
+
+            # Step 1: Create brick
+            create_result = _call_fusion_api("create_brick", {
+                "studs_x": width,
+                "studs_y": depth,
+                "height_units": height,
+                "name": name
+            })
+
+            if not create_result.get("success"):
+                return {"success": False, "error": f"Brick creation failed: {create_result.get('error')}"}
+
+            component_name = create_result.get("component_name", name)
+
+            # Step 2: Export
+            export_cmd = f"export_{export_format}"
+            export_result = _call_fusion_api(export_cmd, {
+                "component_name": component_name,
+                "resolution": "high"
+            }, timeout=60.0)
+
+            return {
+                "success": export_result.get("success", False),
+                "workflow": "create_and_export",
+                "brick": {"name": component_name, "type": brick_type, "width": width, "depth": depth},
+                "export": {"format": export_format, "path": export_result.get("path")},
+                "error": export_result.get("error") if not export_result.get("success") else None
+            }
+
+        elif tool_name == "create_and_print":
+            # Workflow: Create brick -> Export STL -> Slice for 3D printing
+            brick_type = params.get("brick_type", "standard")
+            width = params.get("width", 2)
+            depth = params.get("depth", 4)
+            height = params.get("height_bricks", 1.0)
+            printer = params.get("printer", "bambu_p1s")
+            quality = params.get("quality", "lego")
+            material = params.get("material", "pla")
+            name = f"{brick_type}_{width}x{depth}"
+
+            # Step 1: Create brick
+            create_result = _call_fusion_api("create_brick", {
+                "studs_x": width,
+                "studs_y": depth,
+                "height_units": height,
+                "name": name
+            })
+
+            if not create_result.get("success"):
+                return {"success": False, "error": f"Brick creation failed: {create_result.get('error')}"}
+
+            component_name = create_result.get("component_name", name)
+
+            # Step 2: Export STL
+            export_result = _call_fusion_api("export_stl", {
+                "component_name": component_name,
+                "resolution": "high"
+            }, timeout=60.0)
+
+            if not export_result.get("success"):
+                return {"success": False, "error": f"STL export failed: {export_result.get('error')}"}
+
+            stl_path = export_result.get("path")
+
+            # Step 3: Slice for printing
+            slice_result = _call_slicer_api("/slice/lego", "POST", {
+                "stl_path": stl_path,
+                "printer": printer,
+                "brick_type": brick_type
+            })
+
+            return {
+                "success": slice_result.get("success", False),
+                "workflow": "create_and_print",
+                "brick": {"name": component_name, "type": brick_type, "width": width, "depth": depth},
+                "stl_path": stl_path,
+                "print": {
+                    "printer": printer,
+                    "quality": quality,
+                    "material": material,
+                    "gcode_path": slice_result.get("path"),
+                    "estimated_time_min": slice_result.get("estimated_time_min"),
+                    "filament_grams": slice_result.get("filament_grams")
+                },
+                "error": slice_result.get("error") if not slice_result.get("success") else None
+            }
+
+        elif tool_name == "create_and_mill":
+            # Workflow: Create brick -> Setup CAM -> Generate milling G-code
+            brick_type = params.get("brick_type", "standard")
+            width = params.get("width", 2)
+            depth = params.get("depth", 4)
+            height = params.get("height_bricks", 1.0)
+            machine = params.get("machine", "grbl")
+            stock_material = params.get("stock_material", "abs")
+            name = f"{brick_type}_{width}x{depth}_mill"
+
+            # Step 1: Create brick (solid for milling)
+            create_result = _call_fusion_api("create_brick", {
+                "studs_x": width,
+                "studs_y": depth,
+                "height_units": height,
+                "hollow": False,
+                "name": name
+            })
+
+            if not create_result.get("success"):
+                return {"success": False, "error": f"Brick creation failed: {create_result.get('error')}"}
+
+            component_name = create_result.get("component_name", name)
+
+            # Step 2: Setup CAM
+            cam_result = _call_fusion_api("setup_cam", {
+                "component_name": component_name,
+                "machine": machine,
+                "material": stock_material
+            }, timeout=60.0)
+
+            if not cam_result.get("success", True):
+                return {"success": False, "error": f"CAM setup failed: {cam_result.get('error')}"}
+
+            # Step 3: Generate G-code
+            gcode_result = _call_fusion_api("generate_gcode", {
+                "component_name": component_name,
+                "machine": machine
+            }, timeout=120.0)
+
+            return {
+                "success": gcode_result.get("success", False),
+                "workflow": "create_and_mill",
+                "brick": {"name": component_name, "type": brick_type, "width": width, "depth": depth},
+                "milling": {
+                    "machine": machine,
+                    "stock_material": stock_material,
+                    "gcode_path": gcode_result.get("path"),
+                    "operations": cam_result.get("operations", []),
+                    "estimated_time_min": gcode_result.get("estimated_time_min")
+                },
+                "error": gcode_result.get("error") if not gcode_result.get("success") else None
+            }
+
+        elif tool_name == "create_and_engrave":
+            # Workflow: Create brick -> Generate laser engraving G-code
+            brick_type = params.get("brick_type", "tile")
+            width = params.get("width", 2)
+            depth = params.get("depth", 2)
+            text = params.get("text")
+            svg_path = params.get("svg_path")
+            engrave_preset = params.get("engrave_preset", "abs_engrave_light")
+            name = f"engrave_{width}x{depth}"
+
+            # Step 1: Create tile/brick
+            create_result = _call_fusion_api("create_tile", {
+                "studs_x": width,
+                "studs_y": depth,
+                "name": name
+            })
+
+            if not create_result.get("success"):
+                return {"success": False, "error": f"Brick creation failed: {create_result.get('error')}"}
+
+            component_name = create_result.get("component_name", name)
+
+            # Step 2: Generate laser G-code
+            engrave_params = {
+                "component_name": component_name,
+                "preset": engrave_preset
+            }
+            if text:
+                engrave_params["text"] = text
+            if svg_path:
+                engrave_params["svg_path"] = svg_path
+
+            engrave_result = _call_fusion_api("generate_laser_gcode", engrave_params, timeout=60.0)
+
+            return {
+                "success": engrave_result.get("success", False),
+                "workflow": "create_and_engrave",
+                "brick": {"name": component_name, "type": brick_type, "width": width, "depth": depth},
+                "engrave": {
+                    "preset": engrave_preset,
+                    "text": text,
+                    "svg_path": svg_path,
+                    "gcode_path": engrave_result.get("path")
+                },
+                "error": engrave_result.get("error") if not engrave_result.get("success") else None
+            }
+
         else:
             raise ValueError(f"Tool not implemented: {tool_name}")
 
@@ -564,6 +766,35 @@ class MCPBridge:
                 "quality": "lego",
             },
             "generate_brick_set": {"set_type": "basic"},
+            # Workflow examples
+            "create_and_export": {
+                "brick_type": "standard",
+                "width": 2,
+                "depth": 4,
+                "export_format": "stl"
+            },
+            "create_and_print": {
+                "brick_type": "standard",
+                "width": 2,
+                "depth": 4,
+                "printer": "bambu_p1s",
+                "quality": "lego",
+                "material": "pla"
+            },
+            "create_and_mill": {
+                "brick_type": "standard",
+                "width": 2,
+                "depth": 4,
+                "machine": "grbl",
+                "stock_material": "abs"
+            },
+            "create_and_engrave": {
+                "brick_type": "tile",
+                "width": 4,
+                "depth": 4,
+                "text": "LEGO",
+                "engrave_preset": "abs_engrave_light"
+            },
         }
 
         return examples.get(tool_name, {})

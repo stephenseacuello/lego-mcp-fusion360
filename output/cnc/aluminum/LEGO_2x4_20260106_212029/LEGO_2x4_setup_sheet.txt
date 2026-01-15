@@ -1,0 +1,107 @@
+============================================================
+ALUMINUM LEGO BRICK - SETUP SHEET
+============================================================
+
+Date: 2026-01-06 21:20
+Machine: Bantam Desktop CNC
+Material: 6061-T6
+
+BRICK SPECIFICATION:
+  Size: 2x4 studs
+  Height: 3 plates
+  Type: standard
+
+STOCK SPECIFICATION:
+  Width (X): 16.0 mm (exact)
+  Depth (Y): 32.0 mm (exact)
+  Height (Z): 9.600000000000001 mm + 1.0 mm offset
+  Total Z: 10.600000000000001 mm
+
+------------------------------------------------------------
+SETUP 1: TOP
+------------------------------------------------------------
+WCS: G54
+Workholding: soft_jaws
+
+INSTRUCTIONS:
+  1. Install soft jaws in vice (machine fresh if needed)
+  2. Load stock with longest dimension along X axis
+  3. Stock bottom should sit on parallels at known height
+  4. Tighten vice gently - aluminum deforms easily
+  5. Set WCS origin:
+     - X: Left edge of stock
+     - Y: Front edge of stock
+     - Z: Top of stock (after facing = part Z0)
+  6. Probe tool lengths:
+     - T1: 3mm Flat Endmill
+     - T2: 2mm Flat Endmill
+  7. Apply WD-40 mist before starting
+  8. Run at reduced feed (50%) for first part
+
+OPERATIONS:
+  1. Face Top
+     Tool: 3mm Flat Endmill
+     RPM: 9702, Feed: 679.2 mm/min
+     Note: Remove stock offset, establish Z0 at part top
+  2. Rough Stud Area
+     Tool: 3mm Flat Endmill
+     RPM: 9702, Feed: 679.2 mm/min
+     Note: Rough around studs, leave 0.2mm for finishing
+  3. Finish Stud Profiles
+     Tool: 2mm Flat Endmill
+     RPM: 10000, Feed: 350.0 mm/min
+     Note: Finish stud diameter to 4.8mm ±0.05
+
+------------------------------------------------------------
+SETUP 2: BOTTOM
+------------------------------------------------------------
+WCS: G55
+Workholding: soft_jaws
+
+INSTRUCTIONS:
+  1. Remove part from vice carefully
+  2. Clean chips from soft jaws and part
+  3. Flip part 180° - studs now facing DOWN
+  4. Place studs into soft jaw recesses
+     (Jaws should have been machined for this)
+  5. Apply light clamping pressure only
+  6. Set new WCS (G55) origin:
+     - X: Same corner as Setup 1 (now mirrored)
+     - Y: Same edge alignment
+     - Z: New top surface (part bottom facing up)
+  7. Verify alignment with edge finder
+  8. Same tools as Setup 1 - no tool change needed!
+     - T1: 3mm Flat Endmill
+     - T2: 2mm Flat Endmill
+  9. Apply WD-40 mist before cutting
+
+OPERATIONS:
+  1. Face Bottom
+     Tool: 3mm Flat Endmill
+     RPM: 9702, Feed: 679.2 mm/min
+     Note: Light facing to clean bottom surface
+  2. Rough Hollow Cavity
+     Tool: 3mm Flat Endmill
+     RPM: 9702, Feed: 679.2 mm/min
+     Note: Rough hollow to 6.400000000000001mm depth
+  3. Finish Hollow Walls
+     Tool: 2mm Flat Endmill
+     RPM: 10000, Feed: 350.0 mm/min
+     Note: Finish wall thickness to 1.5mm ±0.05
+  4. Bore Tube IDs
+     Tool: 2mm Flat Endmill
+     RPM: 10000, Feed: 250.0 mm/min
+     Note: Helical interpolation for tube ID 4.8mm
+
+============================================================
+TOOLS REQUIRED:
+  - 2mm Flat Endmill
+  - 3mm Flat Endmill
+
+SAFETY NOTES:
+  - Wear safety glasses
+  - Use WD-40 mist for aluminum
+  - Monitor for chip buildup
+  - Check for chatter (reduce feed if present)
+  - Verify dimensions after Setup 1 before flipping
+============================================================

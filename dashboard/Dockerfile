@@ -23,9 +23,12 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     curl \
+    # OpenCV dependencies (for YOLO vision detection)
+    libgl1 \
+    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies (minimal set for dashboard)
+# Install Python dependencies (v5.0 World-Class Manufacturing Platform)
 RUN pip install --no-cache-dir \
     Flask>=2.3.0 \
     Flask-SocketIO>=5.3.0 \
@@ -34,7 +37,28 @@ RUN pip install --no-cache-dir \
     requests>=2.28.0 \
     gunicorn>=21.0.0 \
     eventlet>=0.33.0 \
-    python-dotenv>=1.0.0
+    celery[redis]>=5.3.0 \
+    python-dotenv>=1.0.0 \
+    psutil>=5.9.0 \
+    # v5.0 Database and ORM (ISA-95 data model)
+    SQLAlchemy>=2.0.0 \
+    psycopg2-binary>=2.9.0 \
+    alembic>=1.12.0 \
+    # v5.0 Manufacturing services
+    redis>=5.0.0 \
+    numpy>=1.24.0 \
+    scipy>=1.11.0 \
+    # v5.0 Equipment controllers (async)
+    aiohttp>=3.9.0 \
+    pyserial>=3.5 \
+    opencv-python-headless>=4.8.0 \
+    # v8.0 ML Detection (YOLO11 for real brick detection)
+    ultralytics>=8.0.0 \
+    torch>=2.0.0 \
+    torchvision>=0.15.0 \
+    # Roboflow SDK (for LEGO-specific brick detection)
+    inference-sdk>=0.9.0 \
+    roboflow>=1.1.0
 
 # Copy dashboard application
 COPY dashboard/ /app/

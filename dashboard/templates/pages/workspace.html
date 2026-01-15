@@ -12,7 +12,7 @@
             {% endfor %}
         </select>
         <button class="btn btn-secondary" id="calibrateBtn">Calibrate</button>
-        <button class="btn btn-secondary" id="settingsBtn">⚙️</button>
+        <a href="/workspace/settings" class="btn btn-secondary">⚙️ Camera Settings</a>
     </div>
 </div>
 
@@ -54,13 +54,13 @@
         </div>
         
         <div class="twin-container" id="twinContainer">
-            <!-- Grid-based 2D view -->
-            <div class="twin-grid" id="twinGrid">
-                {% for row in range(8) %}
-                <div class="grid-row">
-                    {% for col in range(8) %}
-                    <div class="grid-cell" data-row="{{ row + 1 }}" data-col="{{ 'ABCDEFGH'[col] }}">
-                        <span class="cell-label">{{ 'ABCDEFGH'[col] }}{{ row + 1 }}</span>
+            <!-- Grid-based 2D view - 16x32 grey baseplate -->
+            <div class="twin-grid" id="twinGrid" style="grid-template-columns: repeat(32, 1fr); overflow-x: auto;">
+                {% for row in range(16) %}
+                <div class="grid-row" style="display: contents;">
+                    {% for col in range(32) %}
+                    <div class="grid-cell" data-row="{{ row + 1 }}" data-col="{{ col + 1 }}" style="min-width: 20px; min-height: 20px;">
+                        <span class="cell-label" style="font-size: 8px;">{{ col + 1 }}-{{ row + 1 }}</span>
                     </div>
                     {% endfor %}
                 </div>
@@ -155,23 +155,40 @@ document.getElementById('captureBtn').addEventListener('click', captureImage);
 
 function startStreaming() {
     const cameraId = document.getElementById('cameraSelect').value;
-    
+    console.log('Starting camera:', cameraId);
+
+    // Show loading state
+    document.getElementById('startBtn').textContent = '⏳ Connecting...';
+    document.getElementById('startBtn').disabled = true;
+
     // Open camera
     fetch(`/workspace/camera/${cameraId}/open`, { method: 'POST' })
-        .then(r => r.json())
+        .then(r => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
         .then(data => {
+            console.log('Camera response:', data);
             if (data.success) {
                 streaming = true;
-                document.getElementById('startBtn').disabled = true;
+                document.getElementById('startBtn').textContent = '▶ Start';
                 document.getElementById('stopBtn').disabled = false;
                 document.getElementById('cameraPlaceholder').style.display = 'none';
-                
+
                 // Start frame updates
                 updateFrame();
-                
-                // Start detection loop
-                detectionInterval = setInterval(runDetection, 500); // 2 FPS detection
+
+                // Start detection loop (1 FPS to reduce API load)
+                detectionInterval = setInterval(runDetection, 1000); // 1 FPS detection
+            } else {
+                throw new Error(data.error || 'Failed to open camera');
             }
+        })
+        .catch(err => {
+            console.error('Camera error:', err);
+            document.getElementById('startBtn').textContent = '▶ Start';
+            document.getElementById('startBtn').disabled = false;
+            alert('Failed to start camera: ' + err.message);
         });
 }
 
@@ -190,13 +207,13 @@ function stopStreaming() {
 
 function updateFrame() {
     if (!streaming) return;
-    
+
     const img = document.getElementById('cameraImage');
     img.src = '/workspace/frame?' + Date.now();
     img.style.display = 'block';
-    
+
     frameCount++;
-    
+
     // Update FPS counter
     const now = Date.now();
     if (now - lastFpsUpdate >= 1000) {
@@ -204,8 +221,9 @@ function updateFrame() {
         frameCount = 0;
         lastFpsUpdate = now;
     }
-    
-    requestAnimationFrame(updateFrame);
+
+    // Throttle to ~10 FPS instead of 60 FPS (reduces bandwidth)
+    setTimeout(updateFrame, 100);
 }
 
 function runDetection() {
@@ -282,13 +300,23 @@ function updateBrickList(bricks) {
 function updateTwinView(bricks) {
     // Clear existing brick markers
     document.querySelectorAll('.grid-cell .brick-marker').forEach(m => m.remove());
-    
+
     // Add brick markers
     bricks.forEach(brick => {
         const pos = brick.grid_position;
-        const col = pos[0];
-        const row = parseInt(pos.slice(1));
-        
+        // Parse position - can be "A3" (letter-number) or "5-3" (col-row)
+        let col, row;
+        if (pos.includes('-')) {
+            // Numeric format: "col-row"
+            const parts = pos.split('-');
+            col = parts[0];
+            row = parseInt(parts[1]);
+        } else {
+            // Letter format: "A3"
+            col = pos[0];
+            row = parseInt(pos.slice(1));
+        }
+
         const cell = document.querySelector(`.grid-cell[data-col="${col}"][data-row="${row}"]`);
         if (cell) {
             const marker = document.createElement('div');

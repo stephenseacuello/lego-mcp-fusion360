@@ -169,6 +169,86 @@ POST_PROCESSORS = {
         "name": "Mach3",
         "extension": ".nc",
         "search_terms": ["mach3", "mach4"]
+    },
+    "bantam": {
+        "name": "Bantam Tools (TinyG)",
+        "extension": ".nc",
+        "search_terms": ["grbl", "tinyg", "bantam"],
+        "controller": "TinyG",
+        "notes": "Bantam Desktop CNC uses TinyG controller, GRBL-compatible"
+    }
+}
+
+
+# =============================================================================
+# ALUMINUM LEGO CONSTANTS
+# =============================================================================
+
+# Bantam Desktop CNC specifications (must match standalone workflow)
+BANTAM_SPECS = {
+    "name": "Bantam Tools Desktop CNC",
+    "controller": "TinyG",
+    "work_envelope": {"x": 140, "y": 114, "z": 60},  # mm
+    "spindle_rpm_min": 2000,
+    "spindle_rpm_max": 10000,
+    "spindle_power_watts": 150,
+    "max_feed_rate": 2540,  # mm/min
+    "max_rapid_rate": 2540,  # mm/min
+    "resolution": 0.001,  # mm
+    "tool_holder": "ER11",
+    "max_tool_diameter": 6.35,  # 1/4" = 6.35mm
+}
+
+# LEGO brick standard dimensions (mm)
+LEGO_DIMS = {
+    "stud_diameter": 4.8,
+    "stud_height": 1.7,
+    "pitch": 8.0,  # Stud-to-stud center distance
+    "plate_height": 3.2,
+    "brick_height": 9.6,  # 3 plates
+    "wall_thickness": 1.5,
+    "tube_od": 6.51,  # Outer diameter of bottom tubes
+    "tube_id": 4.8,   # Inner diameter (matches stud)
+    "tolerance": 0.05,  # Target tolerance
+}
+
+# Aluminum 6061-T6 cutting parameters optimized for Bantam
+ALUMINUM_PARAMS = {
+    "material": "6061-T6",
+    "sfm": 300,  # Surface feet per minute (conservative for desktop CNC)
+    "chip_load_2mm": 0.025,  # mm/tooth for 2mm endmill
+    "chip_load_3mm": 0.035,  # mm/tooth for 3mm endmill
+    "doc_roughing": 0.5,     # Depth of cut - roughing (mm)
+    "doc_finishing": 0.15,   # Depth of cut - finishing (mm)
+    "woc_roughing": 0.4,     # Width of cut as % of tool diameter
+    "woc_finishing": 0.1,
+    "stock_to_leave": 0.2,   # mm left for finishing pass
+    "plunge_rate_factor": 0.3,  # Plunge at 30% of feed rate
+}
+
+# Optimized 2-tool strategy for aluminum LEGO
+ALUMINUM_TOOLS = {
+    "T1_roughing": {
+        "id": "flat_3mm_aluminum",
+        "number": 1,
+        "type": "flat_endmill",
+        "diameter_mm": 3.0,
+        "flute_length_mm": 12.0,
+        "overall_length_mm": 50.0,
+        "flutes": 2,
+        "description": "3mm Flat Endmill - Facing & Roughing",
+        "operations": ["facing", "adaptive_roughing", "pocket_roughing"]
+    },
+    "T2_finishing": {
+        "id": "flat_2mm_aluminum",
+        "number": 2,
+        "type": "flat_endmill",
+        "diameter_mm": 2.0,
+        "flute_length_mm": 8.0,
+        "overall_length_mm": 38.0,
+        "flutes": 2,
+        "description": "2mm Flat Endmill - Finishing & Detail",
+        "operations": ["contour_finishing", "stud_finishing", "tube_milling"]
     }
 }
 
@@ -965,4 +1045,816 @@ class CAMProcessor:
             "applications": data.get('lego_applications', {}),
             "material_compatibility": data.get('material_compatibility', {}),
             "safety_notes": data.get('safety_notes', [])
+        }
+
+    # =========================================================================
+    # ALUMINUM LEGO MILLING - BANTAM DESKTOP CNC
+    # =========================================================================
+
+    def calculate_aluminum_feeds_speeds(
+        self,
+        tool_diameter_mm: float,
+        flutes: int = 2
+    ) -> Dict[str, float]:
+        """
+        Calculate feeds and speeds for aluminum 6061-T6 on Bantam Desktop CNC.
+
+        Uses SFM-based calculation with conservative parameters for desktop CNC.
+
+        Args:
+            tool_diameter_mm: Tool diameter in mm
+            flutes: Number of flutes (default 2)
+
+        Returns:
+            Dict with rpm, feed_rate, plunge_rate, chip_load
+        """
+        import math
+
+        sfm = ALUMINUM_PARAMS["sfm"]
+
+        # RPM = SFM × 12 / (π × Diameter_inches)
+        tool_diameter_inch = tool_diameter_mm / 25.4
+        rpm = int((sfm * 12) / (math.pi * tool_diameter_inch))
+
+        # Clamp to Bantam's spindle range
+        rpm = max(BANTAM_SPECS["spindle_rpm_min"], min(rpm, BANTAM_SPECS["spindle_rpm_max"]))
+
+        # Chip load based on tool size
+        if tool_diameter_mm <= 2.0:
+            chip_load = ALUMINUM_PARAMS["chip_load_2mm"]
+        elif tool_diameter_mm <= 3.0:
+            chip_load = ALUMINUM_PARAMS["chip_load_3mm"]
+        else:
+            chip_load = 0.050  # Larger tools
+
+        # Feed rate = RPM × Flutes × Chip load
+        feed_rate = rpm * flutes * chip_load
+
+        # Clamp feed rate to Bantam max
+        feed_rate = min(feed_rate, BANTAM_SPECS["max_feed_rate"])
+
+        # Plunge rate at 30% of feed
+        plunge_rate = feed_rate * ALUMINUM_PARAMS["plunge_rate_factor"]
+
+        return {
+            "rpm": rpm,
+            "feed_rate": round(feed_rate, 1),
+            "plunge_rate": round(plunge_rate, 1),
+            "chip_load": chip_load
+        }
+
+    def create_aluminum_brick_setup(
+        self,
+        component_name: str,
+        setup_number: int,
+        setup_type: str,  # "top" or "bottom"
+        stock_width_mm: float,
+        stock_depth_mm: float,
+        stock_height_mm: float,
+        z_offset_mm: float = 1.0
+    ) -> adsk.cam.Setup:
+        """
+        Create a CAM setup for aluminum LEGO brick milling.
+
+        Args:
+            component_name: Name of component to machine
+            setup_number: 1 or 2 (for SETUP1/SETUP2)
+            setup_type: "top" (studs up) or "bottom" (hollow side)
+            stock_width_mm: Stock X dimension
+            stock_depth_mm: Stock Y dimension
+            stock_height_mm: Stock Z dimension (brick height)
+            z_offset_mm: Extra Z material on stock
+
+        Returns:
+            CAM Setup object
+        """
+        cam = self.cam
+        if not cam:
+            raise Exception("Could not access CAM workspace")
+
+        # Find the component/body to machine
+        design = adsk.fusion.Design.cast(self.app.activeProduct)
+        target_comp = None
+
+        # Search for component
+        for occ in design.rootComponent.occurrences:
+            if occ.component.name == component_name:
+                target_comp = occ.component
+                break
+
+        # If not found in occurrences, check root component bodies
+        if not target_comp:
+            for body in design.rootComponent.bRepBodies:
+                if body.name == component_name or component_name in body.name:
+                    target_comp = design.rootComponent
+                    break
+
+        if not target_comp:
+            raise Exception(f"Component not found: {component_name}")
+
+        # Create setup
+        setups = cam.setups
+        setup_input = setups.createInput(adsk.cam.OperationTypes.MillingOperation)
+
+        # Configure setup
+        setup = setups.add(setup_input)
+        setup.name = f"SETUP{setup_number}_{setup_type.upper()}"
+
+        # Set models to machine
+        models = adsk.core.ObjectCollection.create()
+        for body in target_comp.bRepBodies:
+            models.add(body)
+        setup.models = models
+
+        # Configure stock - EXACT dimensions (no offset on X/Y)
+        setup.stockMode = adsk.cam.SetupStockMode.FixedBoxStock
+
+        # Stock dimensions - exact X/Y, Z includes offset
+        total_height = stock_height_mm + z_offset_mm
+        setup.stockFixedX = adsk.core.ValueInput.createByReal(self._cm(stock_width_mm))
+        setup.stockFixedY = adsk.core.ValueInput.createByReal(self._cm(stock_depth_mm))
+        setup.stockFixedZ = adsk.core.ValueInput.createByReal(self._cm(total_height))
+
+        # WCS setup depends on orientation
+        if setup_type == "top":
+            # G54 for top setup, origin at front-left-top of stock
+            setup.wcsOriginMode = adsk.cam.WCSOriginModes.StockBoxPoint
+            # Set point to top-front-left
+            setup.wcsOriginBoxPoint = adsk.cam.StockPointCorner.TopFrontLeft
+        else:
+            # G55 for bottom setup after flip
+            setup.wcsOriginMode = adsk.cam.WCSOriginModes.StockBoxPoint
+            # After flip, origin is still front-left-top (but part is upside down)
+            setup.wcsOriginBoxPoint = adsk.cam.StockPointCorner.TopFrontLeft
+
+        return setup
+
+    def add_facing_operation(
+        self,
+        setup: adsk.cam.Setup,
+        tool_diameter_mm: float = 3.0,
+        depth_mm: float = 0.2
+    ) -> Optional[adsk.cam.Operation]:
+        """
+        Add facing operation to remove Z offset and create flat top.
+
+        Args:
+            setup: CAM setup
+            tool_diameter_mm: Tool diameter
+            depth_mm: Total facing depth (Z offset)
+
+        Returns:
+            Facing operation or None
+        """
+        cam = self.cam
+
+        # Calculate feeds/speeds for aluminum
+        feeds = self.calculate_aluminum_feeds_speeds(tool_diameter_mm)
+
+        try:
+            # Find face template
+            template_lib = cam.templateLibrary
+            templates = template_lib.templates
+
+            face_template = None
+            for template in templates:
+                if 'face' in template.name.lower():
+                    face_template = template
+                    break
+
+            if face_template:
+                template_url = face_template.url
+            else:
+                template_url = 'systempreferences://Strategies/Milling/Face'
+
+            # Create operation
+            operations = setup.operations
+            op_input = operations.createInput(template_url)
+
+            op = operations.add(op_input)
+            op.name = f"Op010_Face_T{ALUMINUM_TOOLS['T1_roughing']['number']}"
+
+            # Configure parameters
+            params = op.parameters
+
+            self._set_param_safe(params, "tool_diameter", self._cm(tool_diameter_mm))
+            self._set_param_safe(params, "spindleSpeed", feeds["rpm"])
+            self._set_param_safe(params, "feedrate", feeds["feed_rate"] / 60.0)  # mm/s
+            self._set_param_safe(params, "plungeRate", feeds["plunge_rate"] / 60.0)
+            self._set_param_safe(params, "surfaceSpeed", 0)  # We're setting RPM directly
+
+            # Stepover for facing (40% of tool diameter)
+            stepover = tool_diameter_mm * ALUMINUM_PARAMS["woc_roughing"]
+            self._set_param_safe(params, "stepover", self._cm(stepover))
+
+            # Depth of cut per pass
+            self._set_param_safe(params, "maximumStepdown", self._cm(ALUMINUM_PARAMS["doc_roughing"]))
+
+            return op
+
+        except Exception as e:
+            print(f"Error creating facing operation: {e}")
+            return None
+
+    def add_stud_roughing_operation(
+        self,
+        setup: adsk.cam.Setup,
+        stud_positions: List[tuple],
+        stud_height_mm: float = 1.7,
+        tool_diameter_mm: float = 3.0
+    ) -> Optional[adsk.cam.Operation]:
+        """
+        Add adaptive clearing around studs using 3mm endmill.
+
+        Removes material around stud cylinders, leaving stock for finishing.
+
+        Args:
+            setup: CAM setup
+            stud_positions: List of (x, y) stud center positions
+            stud_height_mm: Stud height
+            tool_diameter_mm: Roughing tool diameter
+
+        Returns:
+            Operation or None
+        """
+        cam = self.cam
+        feeds = self.calculate_aluminum_feeds_speeds(tool_diameter_mm)
+
+        try:
+            # Use adaptive clearing for efficient roughing
+            template_lib = cam.templateLibrary
+            templates = template_lib.templates
+
+            adaptive_template = None
+            for template in templates:
+                if 'adaptive' in template.name.lower():
+                    adaptive_template = template
+                    break
+
+            if adaptive_template:
+                template_url = adaptive_template.url
+            else:
+                template_url = 'systempreferences://Strategies/Milling/Adaptive%20Clearing'
+
+            operations = setup.operations
+            op_input = operations.createInput(template_url)
+
+            op = operations.add(op_input)
+            op.name = f"Op020_StudRough_T{ALUMINUM_TOOLS['T1_roughing']['number']}"
+
+            params = op.parameters
+
+            self._set_param_safe(params, "tool_diameter", self._cm(tool_diameter_mm))
+            self._set_param_safe(params, "spindleSpeed", feeds["rpm"])
+            self._set_param_safe(params, "feedrate", feeds["feed_rate"] / 60.0)
+            self._set_param_safe(params, "plungeRate", feeds["plunge_rate"] / 60.0)
+
+            # Adaptive parameters
+            self._set_param_safe(params, "maximumStepdown", self._cm(ALUMINUM_PARAMS["doc_roughing"]))
+            optimal_load = tool_diameter_mm * ALUMINUM_PARAMS["woc_roughing"]
+            self._set_param_safe(params, "optimalLoad", self._cm(optimal_load))
+            self._set_param_safe(params, "stockToLeave", self._cm(ALUMINUM_PARAMS["stock_to_leave"]))
+
+            return op
+
+        except Exception as e:
+            print(f"Error creating stud roughing: {e}")
+            return None
+
+    def add_stud_finishing_operation(
+        self,
+        setup: adsk.cam.Setup,
+        stud_diameter_mm: float = 4.8,
+        tool_diameter_mm: float = 2.0
+    ) -> Optional[adsk.cam.Operation]:
+        """
+        Add finishing operation for stud cylinders using 2mm endmill.
+
+        Args:
+            setup: CAM setup
+            stud_diameter_mm: LEGO stud diameter (4.8mm)
+            tool_diameter_mm: Finishing tool diameter (2mm)
+
+        Returns:
+            Operation or None
+        """
+        cam = self.cam
+        feeds = self.calculate_aluminum_feeds_speeds(tool_diameter_mm)
+
+        # Reduce feed rate for finishing
+        finish_feed = feeds["feed_rate"] * 0.7
+
+        try:
+            # Use contour for circular finishing
+            template_lib = cam.templateLibrary
+            templates = template_lib.templates
+
+            contour_template = None
+            for template in templates:
+                if 'contour' in template.name.lower() and '2d' in template.name.lower():
+                    contour_template = template
+                    break
+
+            if contour_template:
+                template_url = contour_template.url
+            else:
+                template_url = 'systempreferences://Strategies/Milling/2D%20Contour'
+
+            operations = setup.operations
+            op_input = operations.createInput(template_url)
+
+            op = operations.add(op_input)
+            op.name = f"Op030_StudFinish_T{ALUMINUM_TOOLS['T2_finishing']['number']}"
+
+            params = op.parameters
+
+            self._set_param_safe(params, "tool_diameter", self._cm(tool_diameter_mm))
+            self._set_param_safe(params, "spindleSpeed", feeds["rpm"])
+            self._set_param_safe(params, "feedrate", finish_feed / 60.0)
+            self._set_param_safe(params, "plungeRate", feeds["plunge_rate"] / 60.0)
+
+            # No stock to leave - final pass
+            self._set_param_safe(params, "stockToLeave", 0)
+            self._set_param_safe(params, "maximumStepdown", self._cm(ALUMINUM_PARAMS["doc_finishing"] * 2))
+
+            return op
+
+        except Exception as e:
+            print(f"Error creating stud finishing: {e}")
+            return None
+
+    def add_hollow_pocketing_operation(
+        self,
+        setup: adsk.cam.Setup,
+        pocket_depth_mm: float,
+        wall_thickness_mm: float = 1.5,
+        tool_diameter_mm: float = 3.0
+    ) -> Optional[adsk.cam.Operation]:
+        """
+        Add pocket operation for hollow interior (SETUP2 bottom).
+
+        Args:
+            setup: CAM setup
+            pocket_depth_mm: Hollow depth
+            wall_thickness_mm: Wall thickness to maintain
+            tool_diameter_mm: Roughing tool diameter
+
+        Returns:
+            Operation or None
+        """
+        cam = self.cam
+        feeds = self.calculate_aluminum_feeds_speeds(tool_diameter_mm)
+
+        try:
+            # Use adaptive or pocket for hollow
+            template_lib = cam.templateLibrary
+            templates = template_lib.templates
+
+            pocket_template = None
+            for template in templates:
+                if 'pocket' in template.name.lower() and '2d' in template.name.lower():
+                    pocket_template = template
+                    break
+
+            if pocket_template:
+                template_url = pocket_template.url
+            else:
+                template_url = 'systempreferences://Strategies/Milling/2D%20Pocket'
+
+            operations = setup.operations
+            op_input = operations.createInput(template_url)
+
+            op = operations.add(op_input)
+            op.name = f"Op010_HollowRough_T{ALUMINUM_TOOLS['T1_roughing']['number']}"
+
+            params = op.parameters
+
+            self._set_param_safe(params, "tool_diameter", self._cm(tool_diameter_mm))
+            self._set_param_safe(params, "spindleSpeed", feeds["rpm"])
+            self._set_param_safe(params, "feedrate", feeds["feed_rate"] / 60.0)
+            self._set_param_safe(params, "plungeRate", feeds["plunge_rate"] / 60.0)
+
+            self._set_param_safe(params, "maximumStepdown", self._cm(ALUMINUM_PARAMS["doc_roughing"]))
+            stepover = tool_diameter_mm * ALUMINUM_PARAMS["woc_roughing"]
+            self._set_param_safe(params, "stepover", self._cm(stepover))
+            self._set_param_safe(params, "stockToLeave", self._cm(ALUMINUM_PARAMS["stock_to_leave"]))
+
+            return op
+
+        except Exception as e:
+            print(f"Error creating hollow pocket: {e}")
+            return None
+
+    def add_tube_milling_operation(
+        self,
+        setup: adsk.cam.Setup,
+        tube_positions: List[tuple],
+        tube_od_mm: float = 6.51,
+        tube_id_mm: float = 4.8,
+        tube_height_mm: float = 6.5,
+        tool_diameter_mm: float = 2.0
+    ) -> Optional[adsk.cam.Operation]:
+        """
+        Add circular milling for bottom tubes (stud receptacles).
+
+        Args:
+            setup: CAM setup
+            tube_positions: List of (x, y) tube centers
+            tube_od_mm: Outer diameter of tubes
+            tube_id_mm: Inner diameter of tubes
+            tube_height_mm: Height of tubes
+            tool_diameter_mm: Tool diameter (must be < tube_id)
+
+        Returns:
+            Operation or None
+        """
+        cam = self.cam
+        feeds = self.calculate_aluminum_feeds_speeds(tool_diameter_mm)
+
+        # Finishing feed rate
+        finish_feed = feeds["feed_rate"] * 0.7
+
+        try:
+            # Use bore/circular for tube walls
+            template_lib = cam.templateLibrary
+            templates = template_lib.templates
+
+            bore_template = None
+            for template in templates:
+                if 'bore' in template.name.lower() or 'circular' in template.name.lower():
+                    bore_template = template
+                    break
+
+            if bore_template:
+                template_url = bore_template.url
+            else:
+                template_url = 'systempreferences://Strategies/Milling/Bore'
+
+            operations = setup.operations
+            op_input = operations.createInput(template_url)
+
+            op = operations.add(op_input)
+            op.name = f"Op020_Tubes_T{ALUMINUM_TOOLS['T2_finishing']['number']}"
+
+            params = op.parameters
+
+            self._set_param_safe(params, "tool_diameter", self._cm(tool_diameter_mm))
+            self._set_param_safe(params, "spindleSpeed", feeds["rpm"])
+            self._set_param_safe(params, "feedrate", finish_feed / 60.0)
+            self._set_param_safe(params, "plungeRate", feeds["plunge_rate"] / 60.0)
+
+            self._set_param_safe(params, "maximumStepdown", self._cm(ALUMINUM_PARAMS["doc_finishing"]))
+            self._set_param_safe(params, "stockToLeave", 0)
+
+            return op
+
+        except Exception as e:
+            print(f"Error creating tube milling: {e}")
+            return None
+
+    def add_hollow_finishing_operation(
+        self,
+        setup: adsk.cam.Setup,
+        tool_diameter_mm: float = 2.0
+    ) -> Optional[adsk.cam.Operation]:
+        """
+        Add contour finishing for hollow interior walls.
+
+        Args:
+            setup: CAM setup
+            tool_diameter_mm: Finishing tool diameter
+
+        Returns:
+            Operation or None
+        """
+        cam = self.cam
+        feeds = self.calculate_aluminum_feeds_speeds(tool_diameter_mm)
+        finish_feed = feeds["feed_rate"] * 0.7
+
+        try:
+            template_url = 'systempreferences://Strategies/Milling/2D%20Contour'
+
+            operations = setup.operations
+            op_input = operations.createInput(template_url)
+
+            op = operations.add(op_input)
+            op.name = f"Op030_HollowFinish_T{ALUMINUM_TOOLS['T2_finishing']['number']}"
+
+            params = op.parameters
+
+            self._set_param_safe(params, "tool_diameter", self._cm(tool_diameter_mm))
+            self._set_param_safe(params, "spindleSpeed", feeds["rpm"])
+            self._set_param_safe(params, "feedrate", finish_feed / 60.0)
+            self._set_param_safe(params, "plungeRate", feeds["plunge_rate"] / 60.0)
+
+            self._set_param_safe(params, "stockToLeave", 0)
+            self._set_param_safe(params, "maximumStepdown", self._cm(ALUMINUM_PARAMS["doc_finishing"] * 2))
+
+            return op
+
+        except Exception as e:
+            print(f"Error creating hollow finishing: {e}")
+            return None
+
+    def create_aluminum_lego_cam(
+        self,
+        component_name: str,
+        studs_x: int = 2,
+        studs_y: int = 4,
+        height_plates: int = 3,
+        z_offset_mm: float = 1.0,
+        output_dir: str = None
+    ) -> Dict[str, Any]:
+        """
+        Create complete CAM workflow for aluminum LEGO brick on Bantam Desktop CNC.
+
+        This creates a two-setup workflow:
+        - SETUP1 (G54): Top operations - facing, stud roughing, stud finishing
+        - SETUP2 (G55): Bottom operations - hollow pocket, tubes, wall finishing
+
+        Uses optimized 2-tool strategy:
+        - T1: 3mm flat endmill (facing, roughing)
+        - T2: 2mm flat endmill (finishing, tubes)
+
+        Args:
+            component_name: Name of LEGO brick component in Fusion 360
+            studs_x: Number of studs in X direction (width)
+            studs_y: Number of studs in Y direction (depth)
+            height_plates: Brick height in plates (3 = standard brick)
+            z_offset_mm: Extra stock on Z for facing
+            output_dir: Output directory for G-code files
+
+        Returns:
+            Dict with setups, operations, and G-code paths
+        """
+        # Calculate brick dimensions
+        brick_width = studs_x * LEGO_DIMS["pitch"]
+        brick_depth = studs_y * LEGO_DIMS["pitch"]
+        brick_height = height_plates * LEGO_DIMS["plate_height"]
+
+        # Stock dimensions - exact X/Y, Z includes offset
+        stock_width = brick_width
+        stock_depth = brick_depth
+        stock_height = brick_height
+
+        # Check Bantam work envelope
+        if stock_width > BANTAM_SPECS["work_envelope"]["x"]:
+            raise ValueError(f"Brick too wide ({stock_width}mm) for Bantam ({BANTAM_SPECS['work_envelope']['x']}mm)")
+        if stock_depth > BANTAM_SPECS["work_envelope"]["y"]:
+            raise ValueError(f"Brick too deep ({stock_depth}mm) for Bantam ({BANTAM_SPECS['work_envelope']['y']}mm)")
+        if stock_height + z_offset_mm > BANTAM_SPECS["work_envelope"]["z"]:
+            raise ValueError(f"Brick too tall ({stock_height + z_offset_mm}mm) for Bantam Z travel")
+
+        # Calculate stud positions
+        stud_positions = []
+        for ix in range(studs_x):
+            for iy in range(studs_y):
+                x = LEGO_DIMS["pitch"] / 2 + ix * LEGO_DIMS["pitch"]
+                y = LEGO_DIMS["pitch"] / 2 + iy * LEGO_DIMS["pitch"]
+                stud_positions.append((x, y))
+
+        # Calculate tube positions (between studs for 2+ wide bricks)
+        tube_positions = []
+        if studs_x >= 2 and studs_y >= 2:
+            for ix in range(studs_x - 1):
+                for iy in range(studs_y - 1):
+                    x = LEGO_DIMS["pitch"] + ix * LEGO_DIMS["pitch"]
+                    y = LEGO_DIMS["pitch"] + iy * LEGO_DIMS["pitch"]
+                    tube_positions.append((x, y))
+
+        # Hollow depth (brick height minus top plate thickness)
+        hollow_depth = brick_height - LEGO_DIMS["plate_height"]
+        tube_height = hollow_depth - 0.5  # Slightly shorter than hollow
+
+        result = {
+            "brick": {
+                "studs_x": studs_x,
+                "studs_y": studs_y,
+                "height_plates": height_plates,
+                "dimensions_mm": {
+                    "width": brick_width,
+                    "depth": brick_depth,
+                    "height": brick_height
+                }
+            },
+            "stock": {
+                "width": stock_width,
+                "depth": stock_depth,
+                "height": stock_height,
+                "z_offset": z_offset_mm,
+                "total_height": stock_height + z_offset_mm,
+                "material": "Aluminum 6061-T6"
+            },
+            "tools": ALUMINUM_TOOLS,
+            "setups": [],
+            "gcode_files": {},
+            "errors": []
+        }
+
+        # Create output directory
+        if not output_dir:
+            output_dir = os.path.join(
+                os.path.expanduser("~"),
+                "Documents", "LegoMCP", "exports", "cnc", "aluminum"
+            )
+        os.makedirs(output_dir, exist_ok=True)
+
+        brick_name = f"LEGO_{studs_x}x{studs_y}"
+
+        try:
+            # =====================================================================
+            # SETUP 1: TOP OPERATIONS (Studs)
+            # =====================================================================
+            setup1 = self.create_aluminum_brick_setup(
+                component_name=component_name,
+                setup_number=1,
+                setup_type="top",
+                stock_width_mm=stock_width,
+                stock_depth_mm=stock_depth,
+                stock_height_mm=stock_height,
+                z_offset_mm=z_offset_mm
+            )
+
+            setup1_ops = []
+
+            # Op 010: Face top (remove Z offset)
+            face_op = self.add_facing_operation(
+                setup1,
+                tool_diameter_mm=3.0,
+                depth_mm=z_offset_mm
+            )
+            if face_op:
+                setup1_ops.append("Op010_Face_T1")
+
+            # Op 020: Adaptive rough around studs
+            rough_op = self.add_stud_roughing_operation(
+                setup1,
+                stud_positions=stud_positions,
+                stud_height_mm=LEGO_DIMS["stud_height"],
+                tool_diameter_mm=3.0
+            )
+            if rough_op:
+                setup1_ops.append("Op020_StudRough_T1")
+
+            # Op 030: Finish stud cylinders
+            finish_op = self.add_stud_finishing_operation(
+                setup1,
+                stud_diameter_mm=LEGO_DIMS["stud_diameter"],
+                tool_diameter_mm=2.0
+            )
+            if finish_op:
+                setup1_ops.append("Op030_StudFinish_T2")
+
+            # Generate toolpaths for SETUP1
+            self.generate_toolpaths(setup1)
+
+            # Export SETUP1 G-code
+            setup1_path = os.path.join(output_dir, f"{brick_name}_SETUP1.nc")
+            setup1_result = self.export_gcode(setup1, setup1_path, machine="bantam")
+
+            result["setups"].append({
+                "number": 1,
+                "name": "SETUP1_TOP",
+                "wcs": "G54",
+                "type": "top",
+                "operations": setup1_ops,
+                "gcode_path": setup1_path if setup1_result.get("success") else None,
+                "instructions": [
+                    "Mount stock in soft jaws or fixture plate",
+                    "Top of stock facing up (studs will be machined here)",
+                    "Set Z zero on top of stock",
+                    "Set X/Y zero at front-left corner",
+                    "Use WD-40 mist for coolant"
+                ]
+            })
+
+            if setup1_result.get("success"):
+                result["gcode_files"]["SETUP1"] = setup1_path
+            else:
+                result["errors"].append(f"SETUP1 export failed: {setup1_result.get('error')}")
+
+            # =====================================================================
+            # SETUP 2: BOTTOM OPERATIONS (Hollow & Tubes)
+            # =====================================================================
+            setup2 = self.create_aluminum_brick_setup(
+                component_name=component_name,
+                setup_number=2,
+                setup_type="bottom",
+                stock_width_mm=stock_width,
+                stock_depth_mm=stock_depth,
+                stock_height_mm=stock_height,
+                z_offset_mm=0  # No offset on bottom
+            )
+
+            setup2_ops = []
+
+            # Op 010: Pocket hollow interior
+            hollow_op = self.add_hollow_pocketing_operation(
+                setup2,
+                pocket_depth_mm=hollow_depth,
+                wall_thickness_mm=LEGO_DIMS["wall_thickness"],
+                tool_diameter_mm=3.0
+            )
+            if hollow_op:
+                setup2_ops.append("Op010_HollowRough_T1")
+
+            # Op 020: Mill tubes (if brick is 2x2 or larger)
+            if tube_positions:
+                tube_op = self.add_tube_milling_operation(
+                    setup2,
+                    tube_positions=tube_positions,
+                    tube_od_mm=LEGO_DIMS["tube_od"],
+                    tube_id_mm=LEGO_DIMS["tube_id"],
+                    tube_height_mm=tube_height,
+                    tool_diameter_mm=2.0
+                )
+                if tube_op:
+                    setup2_ops.append("Op020_Tubes_T2")
+
+            # Op 030: Finish hollow walls
+            wall_op = self.add_hollow_finishing_operation(
+                setup2,
+                tool_diameter_mm=2.0
+            )
+            if wall_op:
+                setup2_ops.append("Op030_HollowFinish_T2")
+
+            # Generate toolpaths for SETUP2
+            self.generate_toolpaths(setup2)
+
+            # Export SETUP2 G-code
+            setup2_path = os.path.join(output_dir, f"{brick_name}_SETUP2.nc")
+            setup2_result = self.export_gcode(setup2, setup2_path, machine="bantam")
+
+            result["setups"].append({
+                "number": 2,
+                "name": "SETUP2_BOTTOM",
+                "wcs": "G55",
+                "type": "bottom",
+                "operations": setup2_ops,
+                "gcode_path": setup2_path if setup2_result.get("success") else None,
+                "instructions": [
+                    "FLIP PART - bottom now facing up",
+                    "Re-mount in soft jaws (protect finished studs)",
+                    "Set Z zero on new top surface (bottom of brick)",
+                    "Keep X/Y zero at front-left corner",
+                    "Use G55 work coordinate system"
+                ]
+            })
+
+            if setup2_result.get("success"):
+                result["gcode_files"]["SETUP2"] = setup2_path
+            else:
+                result["errors"].append(f"SETUP2 export failed: {setup2_result.get('error')}")
+
+            # Add summary
+            result["summary"] = {
+                "total_tools": 2,
+                "tool_list": [
+                    "T1: 3mm Flat Endmill (facing, roughing)",
+                    "T2: 2mm Flat Endmill (finishing, tubes)"
+                ],
+                "total_setups": 2,
+                "total_operations": len(setup1_ops) + len(setup2_ops),
+                "output_directory": output_dir,
+                "machine": "Bantam Desktop CNC",
+                "material": "Aluminum 6061-T6"
+            }
+
+        except Exception as e:
+            result["errors"].append(str(e))
+
+        return result
+
+    def get_aluminum_workflow_status(self) -> Dict[str, Any]:
+        """
+        Get status of aluminum LEGO milling capabilities.
+
+        Returns:
+            Dict with available tools, machine specs, and feature support
+        """
+        return {
+            "available": True,
+            "machine": BANTAM_SPECS,
+            "lego_dimensions": LEGO_DIMS,
+            "aluminum_params": ALUMINUM_PARAMS,
+            "tools": ALUMINUM_TOOLS,
+            "workflow": {
+                "type": "two_setup",
+                "setup1": {
+                    "name": "TOP",
+                    "wcs": "G54",
+                    "operations": ["facing", "stud_roughing", "stud_finishing"]
+                },
+                "setup2": {
+                    "name": "BOTTOM",
+                    "wcs": "G55",
+                    "operations": ["hollow_pocketing", "tube_milling", "wall_finishing"]
+                }
+            },
+            "max_brick_size": {
+                "width_studs": int(BANTAM_SPECS["work_envelope"]["x"] / LEGO_DIMS["pitch"]),
+                "depth_studs": int(BANTAM_SPECS["work_envelope"]["y"] / LEGO_DIMS["pitch"]),
+                "height_plates": int((BANTAM_SPECS["work_envelope"]["z"] - 5) / LEGO_DIMS["plate_height"])
+            }
         }

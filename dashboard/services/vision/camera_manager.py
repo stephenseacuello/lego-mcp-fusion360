@@ -51,6 +51,19 @@ class CameraInfo:
     available: bool
     url: str = ""
 
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to JSON-serializable dictionary."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "type": self.type.value,  # Convert enum to string
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "available": self.available,
+            "url": self.url,
+        }
+
 
 class CameraManager:
     """Manages camera input for detection."""
@@ -174,9 +187,14 @@ class CameraManager:
                 logger.error("OpenCV not available")
                 return False
 
-            # Open camera
+            # Open camera with timeout for IP cameras
             if camera.type == CameraType.IP:
-                self._capture = cv2.VideoCapture(camera.url)
+                # Set timeout properties for network streams
+                self._capture = cv2.VideoCapture(camera.url, cv2.CAP_FFMPEG)
+                self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                # Give it up to 5 seconds to connect
+                self._capture.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)
+                self._capture.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)
             else:
                 self._capture = cv2.VideoCapture(camera_id)
 
@@ -184,6 +202,15 @@ class CameraManager:
                 logger.error(f"Failed to open camera {camera_id}")
                 self._capture = None
                 return False
+
+            # For IP cameras, verify we can actually get a frame
+            if camera.type == CameraType.IP:
+                ret, _ = self._capture.read()
+                if not ret:
+                    logger.error(f"Camera {camera_id} opened but no frames available")
+                    self._capture.release()
+                    self._capture = None
+                    return False
 
             # Update camera info with actual values
             camera.width = int(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -452,7 +479,7 @@ class CameraManager:
         return {
             "available_cameras": len(self._cameras),
             "active_camera": self._active_camera,
-            "camera_info": camera.__dict__ if camera else None,
+            "camera_info": camera.to_dict() if camera else None,
             "streaming": self._streaming,
             "frame_count": self._frame_count,
             "last_frame_time": self._last_frame_time,

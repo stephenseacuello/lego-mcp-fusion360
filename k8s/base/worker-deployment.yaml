@@ -1,0 +1,198 @@
+# LegoMCP Worker Deployment
+# PhD-Level Manufacturing Platform - Background Task Processing
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: legomcp
+  labels:
+    app: worker
+    component: background
+    tier: backend
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+        component: background
+        tier: backend
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5001"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: legomcp-worker
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      containers:
+        - name: worker
+          image: legomcp/worker:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "celery", "-A", "worker", "worker"]
+          args:
+            - "--loglevel=info"
+            - "--concurrency=4"
+            - "--queues=default,priority,ml"
+          ports:
+            - name: metrics
+              containerPort: 5001
+              protocol: TCP
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: legomcp-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: legomcp-secrets
+                  key: redis-url
+            - name: CELERY_BROKER_URL
+              valueFrom:
+                secretKeyRef:
+                  name: legomcp-secrets
+                  key: redis-url
+            - name: WORKER_TYPE
+              value: "general"
+          resources:
+            requests:
+              cpu: "500m"
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import celery; app = celery.Celery(); app.control.ping(timeout=5)"
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: models
+              mountPath: /app/models
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        - name: models
+          persistentVolumeClaim:
+            claimName: ml-models-pvc
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: worker
+                topologyKey: kubernetes.io/hostname
+---
+# GPU-enabled ML Worker
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker-ml
+  namespace: legomcp
+  labels:
+    app: worker-ml
+    component: ml
+    tier: backend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker-ml
+  template:
+    metadata:
+      labels:
+        app: worker-ml
+        component: ml
+        tier: backend
+    spec:
+      serviceAccountName: legomcp-worker
+      containers:
+        - name: worker-ml
+          image: legomcp/worker-ml:latest
+          imagePullPolicy: Always
+          command: ["python", "-m", "celery", "-A", "worker", "worker"]
+          args:
+            - "--loglevel=info"
+            - "--concurrency=1"
+            - "--queues=ml,vision,inference"
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: legomcp-secrets
+                  key: database-url
+            - name: REDIS_URL
+              valueFrom:
+                secretKeyRef:
+                  name: legomcp-secrets
+                  key: redis-url
+            - name: WORKER_TYPE
+              value: "ml"
+            - name: CUDA_VISIBLE_DEVICES
+              value: "0"
+          resources:
+            requests:
+              cpu: "1"
+              memory: 4Gi
+              nvidia.com/gpu: "1"
+            limits:
+              cpu: "4"
+              memory: 16Gi
+              nvidia.com/gpu: "1"
+          volumeMounts:
+            - name: models
+              mountPath: /app/models
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: ml-models-pvc
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      nodeSelector:
+        accelerator: nvidia-gpu
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: legomcp-worker
+  namespace: legomcp
+  labels:
+    app: worker

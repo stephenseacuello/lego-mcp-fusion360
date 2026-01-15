@@ -29,6 +29,8 @@ That's it! YOLO11 will auto-download models on first use.
 
 Best for: No GPU, cloud processing, pre-trained models
 
+Note: Roboflow packages require Python <3.13. Use a 3.12 venv for this option.
+
 ```bash
 pip install roboflow inference-sdk
 ```

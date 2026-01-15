@@ -1,20 +1,75 @@
 # LEGO MCP Fusion 360 - Docker Compose Configuration
+# Industry 4.0 Digital Manufacturing Platform
 #
-# This orchestrates the slicer service, dashboard, and optionally the MCP server.
+# This orchestrates the complete manufacturing system:
+# - PostgreSQL database (ISA-95 data model)
+# - Redis cache and message queue
+# - Slicer service (G-code generation)
+# - Dashboard (MES/ERP web UI)
+# - Background worker (async job processing)
+#
 # Fusion 360 runs on the host machine (not in Docker).
 #
 # Usage:
-#   docker-compose up -d                    # Start slicer only
-#   docker-compose --profile full up -d     # Start slicer + dashboard
+#   docker-compose up -d                    # Start core services (postgres, redis, slicer)
+#   docker-compose --profile full up -d     # Start all services including dashboard
+#   docker-compose --profile dev up -d      # Development mode with hot reload
 #   docker-compose logs -f                  # View logs
 #   docker-compose down                     # Stop services
+#   docker-compose down -v                  # Stop and remove volumes (CAUTION: data loss)
 #
 # Before first run:
+#   cp .env.example .env                    # Create environment file
 #   ./scripts/setup-paths.sh                # Setup export path symlinks
 
 version: '3.8'
 
 services:
+  # ============================================
+  # PostgreSQL Database (ISA-95 Manufacturing Data)
+  # ============================================
+  postgres:
+    image: postgres:15-alpine
+    container_name: lego-postgres
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"  # Using 5434 to avoid conflict with local PostgreSQL (5432/5433)
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-lego_manufacturing}
+      POSTGRES_USER: ${POSTGRES_USER:-lego_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lego_mcp_2024}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-lego_admin} -d ${POSTGRES_DB:-lego_manufacturing}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # Redis (Cache + Message Queue + OEE Events)
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: lego-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - lego-network
+
   # ============================================
   # Slicer Service (3D Print G-code)
   # ============================================
@@ -30,8 +85,10 @@ services:
       - ./output:/output
       # STL files from Fusion 360 (via symlink from ~/Documents/LegoMCP/exports)
       - ./output/stl:/input/stl:ro
-      # Custom printer profiles
-      - ./slicer-service/profiles:/app/profiles:ro
+      # Custom printer profiles (read-only)
+      - ./slicer-service/profiles:/app/profiles_source:ro
+      # Writable temp directory for generated configs
+      - slicer_temp:/tmp/slicer
     environment:
       - PYTHONUNBUFFERED=1
     restart: unless-stopped
@@ -44,10 +101,10 @@ services:
       - lego-network
 
   # ============================================
-  # Dashboard (Web UI) - Optional Profile
+  # Dashboard (MES/ERP Web UI)
   # ============================================
   dashboard:
-    profiles: ["full"]
+    profiles: ["full", "dev"]
     build:
       context: .
       dockerfile: dashboard/Dockerfile
@@ -55,15 +112,46 @@ services:
     ports:
       - "${DASHBOARD_PORT:-5000}:5000"
     environment:
+      # Flask configuration
       - FLASK_ENV=${FLASK_ENV:-production}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+
+      # Manufacturing mode
+      - MANUFACTURING_MODE=${MANUFACTURING_MODE:-production}
+
+      # Database connection (PostgreSQL)
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+
       # Connect to Fusion 360 on host machine (port 8767)
       - FUSION_API_URL=http://host.docker.internal:8767
+
       # Connect to slicer container
       - SLICER_API_URL=http://slicer:8766
+
+      # OEE and metrics settings
+      - OEE_COLLECTION_INTERVAL=${OEE_COLLECTION_INTERVAL:-60}
+      - ENABLE_REALTIME_OEE=${ENABLE_REALTIME_OEE:-true}
+
       - PYTHONUNBUFFERED=1
+
+      # Vision/Detection settings (Roboflow for LEGO detection)
+      - ROBOFLOW_API_KEY=${ROBOFLOW_API_KEY:-}
+      - ROBOFLOW_MODEL=${ROBOFLOW_MODEL:-lego-bricks/1}
+      - DETECTION_BACKEND=${DETECTION_BACKEND:-auto}
+      - DETECTION_THRESHOLD=${DETECTION_THRESHOLD:-0.5}
     volumes:
       - ./output:/output
+      - ./dashboard/services/data:/app/data  # JSON data persistence backup
     depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
       slicer:
         condition: service_healthy
     extra_hosts:
@@ -74,6 +162,422 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    networks:
+      - lego-network
+
+  # ============================================
+  # Background Worker (Celery - Async Jobs)
+  # ============================================
+  worker:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-worker
+    command: celery -A worker worker --loglevel=info --concurrency=2
+    environment:
+      # Database connection
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis/Celery
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+
+      # External services
+      - FUSION_API_URL=http://host.docker.internal:8767
+      - SLICER_API_URL=http://slicer:8766
+
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # Celery Beat (Scheduled Tasks - OEE collection)
+  # ============================================
+  scheduler:
+    profiles: ["full"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-scheduler
+    command: celery -A worker beat --loglevel=info
+    environment:
+      # Database connection
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis/Celery
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # Adminer (Database Admin UI) - Development Only
+  # ============================================
+  adminer:
+    profiles: ["dev"]
+    image: adminer:latest
+    container_name: lego-adminer
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # RedisInsight (Redis Admin UI) - Development Only
+  # ============================================
+  redis-insight:
+    profiles: ["dev"]
+    image: redislabs/redisinsight:latest
+    container_name: lego-redis-insight
+    ports:
+      - "${REDIS_INSIGHT_PORT:-8001}:8001"
+    volumes:
+      - redis_insight_data:/db
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # Unity WebSocket Bridge (Real-time Digital Twin)
+  # ============================================
+  # Provides WebSocket connectivity for Unity clients:
+  # - WebGL (browser-based)
+  # - Desktop (Windows/Mac/Linux)
+  # - VR (Meta Quest, HTC Vive)
+  # - AR (HoloLens, iOS ARKit)
+  #
+  # ISO 23247 Compliant Digital Twin Visualization
+  unity-bridge:
+    profiles: ["full", "unity"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-unity-bridge
+    ports:
+      - "${UNITY_WS_PORT:-8770}:8770"
+      - "${UNITY_API_PORT:-8771}:8771"
+    command: python -m dashboard.services.unity.server
+    environment:
+      # Flask configuration
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+
+      # WebSocket configuration
+      - UNITY_WS_HOST=0.0.0.0
+      - UNITY_WS_PORT=8770
+      - UNITY_API_PORT=8771
+
+      # Database connection (PostgreSQL)
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+
+      # Digital Twin settings
+      - TWIN_SYNC_INTERVAL_MS=${TWIN_SYNC_INTERVAL_MS:-100}
+      - TWIN_INTERPOLATION_FPS=${TWIN_INTERPOLATION_FPS:-60}
+      - ENABLE_PINN_SIMULATION=${ENABLE_PINN_SIMULATION:-true}
+
+      # Unity client settings
+      - MAX_UNITY_CLIENTS=${MAX_UNITY_CLIENTS:-100}
+      - UNITY_AUTH_ENABLED=${UNITY_AUTH_ENABLED:-false}
+
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/output
+      - ./dashboard/services/unity:/app/dashboard/services/unity
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8771/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - lego-network
+
+  # ============================================
+  # Predictive Analytics Worker
+  # ============================================
+  # Runs ML models for:
+  # - Failure prediction
+  # - RUL estimation
+  # - Quality forecasting
+  # - Anomaly detection
+  predictive-analytics:
+    profiles: ["full", "ml"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-predictive
+    command: python -m dashboard.services.digital_twin.predictive_worker
+    environment:
+      # Database connection
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+
+      # ML model settings
+      - PREDICTION_INTERVAL_SEC=${PREDICTION_INTERVAL_SEC:-60}
+      - ENABLE_PINN_MODELS=${ENABLE_PINN_MODELS:-true}
+      - MODEL_CACHE_SIZE_MB=${MODEL_CACHE_SIZE_MB:-512}
+
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/output
+      - ml_models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # Vision Processing Service
+  # ============================================
+  # Real-time defect detection and 3D mapping
+  vision-processor:
+    profiles: ["full", "vision"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-vision
+    command: python -m dashboard.services.vision.processor
+    environment:
+      # Database connection
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+
+      # Vision settings
+      - CAMERA_STREAM_URL=${CAMERA_STREAM_URL:-}
+      - DEFECT_DETECTION_ENABLED=${DEFECT_DETECTION_ENABLED:-true}
+      - LAYER_INSPECTION_ENABLED=${LAYER_INSPECTION_ENABLED:-true}
+
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/output
+      - vision_models:/app/vision_models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # Anomaly Response Worker (Automated Response)
+  # ============================================
+  # Monitors anomalies and executes automated responses
+  # with ML-based suggestions and human-in-the-loop escalation
+  anomaly-response:
+    profiles: ["full", "ml"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-anomaly-response
+    command: python -m dashboard.services.digital_twin.anomaly_worker
+    environment:
+      # Database connection
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+
+      # Anomaly response settings
+      - ANOMALY_CHECK_INTERVAL_SEC=${ANOMALY_CHECK_INTERVAL_SEC:-5}
+      - AUTO_RESPONSE_ENABLED=${AUTO_RESPONSE_ENABLED:-true}
+      - ESCALATION_ENABLED=${ESCALATION_ENABLED:-true}
+      - ML_SUGGESTIONS_ENABLED=${ML_SUGGESTIONS_ENABLED:-true}
+
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/output
+      - ml_models:/app/models
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # Supply Chain Twin Service
+  # ============================================
+  # Digital twin of supply chain network with risk analysis
+  supply-chain-twin:
+    profiles: ["full", "supply-chain"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-supply-chain
+    command: python -m dashboard.services.digital_twin.supply_chain_worker
+    environment:
+      # Database connection
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+
+      # Supply chain settings
+      - RISK_ANALYSIS_INTERVAL_SEC=${RISK_ANALYSIS_INTERVAL_SEC:-300}
+      - INVENTORY_SYNC_ENABLED=${INVENTORY_SYNC_ENABLED:-true}
+      - DISRUPTION_SIMULATION_ENABLED=${DISRUPTION_SIMULATION_ENABLED:-true}
+
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # Quality Heatmap Generator
+  # ============================================
+  # Generates 3D quality heatmaps for Unity visualization
+  quality-heatmap:
+    profiles: ["full", "vision"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-quality-heatmap
+    command: python -m dashboard.services.vision.heatmap_worker
+    environment:
+      # Database connection
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+
+      # Heatmap settings
+      - HEATMAP_UPDATE_INTERVAL_SEC=${HEATMAP_UPDATE_INTERVAL_SEC:-60}
+      - HEATMAP_RESOLUTION=${HEATMAP_RESOLUTION:-50}
+      - UNITY_EXPORT_ENABLED=${UNITY_EXPORT_ENABLED:-true}
+
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - lego-network
+
+  # ============================================
+  # VR Training Server
+  # ============================================
+  # WebSocket server for VR training sessions
+  vr-training:
+    profiles: ["full", "vr"]
+    build:
+      context: .
+      dockerfile: dashboard/Dockerfile
+    container_name: lego-vr-training
+    ports:
+      - "${VR_TRAINING_WS_PORT:-8772}:8772"
+      - "${VR_TRAINING_API_PORT:-8773}:8773"
+    command: python -m dashboard.services.hmi.vr_server
+    environment:
+      # Database connection
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+
+      # Redis connection
+      - REDIS_URL=redis://redis:6379/0
+
+      # VR settings
+      - VR_WS_HOST=0.0.0.0
+      - VR_WS_PORT=8772
+      - VR_API_PORT=8773
+      - MAX_VR_SESSIONS=${MAX_VR_SESSIONS:-50}
+      - SESSION_TIMEOUT_MIN=${SESSION_TIMEOUT_MIN:-60}
+
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8773/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - lego-network
+
+  # ============================================
+  # TimescaleDB (Time-Series for Digital Twin)
+  # ============================================
+  # Optional: High-performance time-series for sensor data
+  timescale:
+    profiles: ["full", "timeseries"]
+    image: timescale/timescaledb:latest-pg15
+    container_name: lego-timescale
+    ports:
+      - "${TIMESCALE_PORT:-5435}:5432"
+    environment:
+      POSTGRES_DB: ${TIMESCALE_DB:-lego_timeseries}
+      POSTGRES_USER: ${TIMESCALE_USER:-lego_ts}
+      POSTGRES_PASSWORD: ${TIMESCALE_PASSWORD:-lego_ts_2024}
+    volumes:
+      - timescale_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${TIMESCALE_USER:-lego_ts}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
     networks:
       - lego-network
 
@@ -92,13 +596,15 @@ services:
   #   volumes:
   #     - ./output:/output
   #   environment:
-  #     # Connect to Fusion 360 on host machine (port 8767)
+  #     - DATABASE_URL=postgresql://${POSTGRES_USER:-lego_admin}:${POSTGRES_PASSWORD:-lego_mcp_2024}@postgres:5432/${POSTGRES_DB:-lego_manufacturing}
+  #     - REDIS_URL=redis://redis:6379/0
   #     - FUSION_API_URL=http://host.docker.internal:8767
-  #     # Connect to slicer container
   #     - SLICER_API_URL=http://slicer:8766
   #   extra_hosts:
   #     - "host.docker.internal:host-gateway"
   #   depends_on:
+  #     - postgres
+  #     - redis
   #     - slicer
   #   restart: unless-stopped
   #   networks:
@@ -107,3 +613,25 @@ services:
 networks:
   lego-network:
     driver: bridge
+
+volumes:
+  postgres_data:
+    name: lego_postgres_data
+  redis_data:
+    name: lego_redis_data
+  redis_insight_data:
+    name: lego_redis_insight_data
+  slicer_temp:
+    name: lego_slicer_temp
+  ml_models:
+    name: lego_ml_models
+  vision_models:
+    name: lego_vision_models
+  timescale_data:
+    name: lego_timescale_data
+  vr_training_data:
+    name: lego_vr_training_data
+  supply_chain_data:
+    name: lego_supply_chain_data
+  heatmap_cache:
+    name: lego_heatmap_cache

@@ -282,11 +282,11 @@ class LegoDetector:
     - Mock (for testing without ML dependencies)
     """
 
-    # Pre-trained LEGO models on Roboflow
+    # Pre-trained LEGO models on Roboflow Universe (workspace/project/version)
     ROBOFLOW_MODELS = {
-        "lego-bricks-v1": "lego-brick-detection/3",
-        "lego-bricks-v2": "lego-detection-wm1xg/1",
-        "lego-pieces": "lego-pieces-orcyz/1",
+        "lego-bricks-v1": ("autodash", "lego-bricks-uwgtj", 1),
+        "lego-bricks-v2": ("lego-gbeqo", "lego-bricks-gelcm", 1),
+        "lego-detection": ("legos-3oate", "lego-detection-fsxai", 1),
     }
 
     def __init__(
@@ -297,7 +297,7 @@ class LegoDetector:
         roboflow_model_id: str = None,
         confidence_threshold: float = 0.5,
         device: str = "auto",
-        grid_size: Tuple[int, int] = (8, 8),
+        grid_size: Tuple[int, int] = (32, 16),  # 16x32 baseplate (32 cols, 16 rows)
     ):
         """
         Initialize detector.
@@ -364,10 +364,10 @@ class LegoDetector:
             self._model.to(device)
 
     def _init_roboflow_api(self, api_key: str, model_id: str):
-        """Initialize Roboflow API client."""
-        if not INFERENCE_SDK_AVAILABLE:
+        """Initialize Roboflow API client using roboflow package."""
+        if not ROBOFLOW_AVAILABLE:
             raise ImportError(
-                "inference-sdk not installed. Install with: pip install inference-sdk"
+                "roboflow not installed. Install with: pip install roboflow"
             )
 
         if not api_key:
@@ -378,17 +378,58 @@ class LegoDetector:
                 "Roboflow API key required. Set ROBOFLOW_API_KEY environment variable."
             )
 
-        self._client = InferenceHTTPClient(api_url="https://detect.roboflow.com", api_key=api_key)
-        self._model_id = model_id or self.ROBOFLOW_MODELS["lego-bricks-v1"]
+        # Initialize Roboflow client
+        rf = Roboflow(api_key=api_key)
+
+        # Parse model_id or use default
+        if model_id:
+            # Support formats: "workspace/project/version" or "project/version"
+            parts = model_id.split("/")
+            if len(parts) == 3:
+                workspace, project, version = parts
+                version = int(version)
+            elif len(parts) == 2:
+                # Use workspace from API key
+                project, version = parts
+                version = int(version)
+                workspace = None
+            else:
+                # Use default model
+                workspace, project, version = self.ROBOFLOW_MODELS["lego-bricks-v1"]
+        else:
+            workspace, project, version = self.ROBOFLOW_MODELS["lego-bricks-v1"]
+
+        # Load the model
+        logger.info(f"Loading Roboflow model: {project}/v{version}")
+        try:
+            if workspace:
+                self._rf_project = rf.workspace(workspace).project(project)
+            else:
+                self._rf_project = rf.workspace().project(project)
+            self._model = self._rf_project.version(version).model
+            self._model_id = f"{project}/{version}"
+            logger.info(f"Roboflow model loaded: {self._model_id}")
+        except Exception as e:
+            logger.error(f"Failed to load Roboflow model: {e}")
+            raise
 
     def _init_roboflow_local(self, model_id: str):
-        """Initialize Roboflow local inference."""
+        """Initialize Roboflow local inference using inference SDK."""
         try:
-            from inference import get_model
+            from inference_sdk import InferenceHTTPClient
 
-            self._model = get_model(model_id=model_id or self.ROBOFLOW_MODELS["lego-bricks-v1"])
+            # Get local inference server URL from environment
+            inference_url = os.environ.get("ROBOFLOW_INFERENCE_URL", "http://localhost:9001")
+            api_key = os.environ.get("ROBOFLOW_API_KEY", "")
+
+            self._inference_client = InferenceHTTPClient(
+                api_url=inference_url,
+                api_key=api_key
+            )
+            self._model_id = model_id or os.environ.get("ROBOFLOW_MODEL", "robymarworker/lego-emmet-b200-object-detection/1")
+            logger.info(f"Initialized local inference at {inference_url} with model {self._model_id}")
         except ImportError:
-            raise ImportError("inference not installed. Install with: pip install inference")
+            raise ImportError("inference-sdk not installed. Install with: pip install inference-sdk")
 
     def detect(self, frame: "np.ndarray") -> List[BrickDetection]:
         """
@@ -453,11 +494,29 @@ class LegoDetector:
         return detections
 
     def _detect_roboflow_api(self, frame: "np.ndarray") -> List[BrickDetection]:
-        """Detect using Roboflow API."""
-        # Encode frame as JPEG
-        _, buffer = cv2.imencode(".jpg", frame)
+        """Detect using Roboflow API via roboflow package."""
+        import tempfile
 
-        result = self._client.infer(buffer.tobytes(), model_id=self._model_id)
+        # Save frame to temporary file (roboflow package needs file path)
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp:
+            cv2.imwrite(tmp.name, frame)
+            tmp_path = tmp.name
+
+        try:
+            # Run prediction
+            result = self._model.predict(
+                tmp_path,
+                confidence=int(self.confidence_threshold * 100),
+                overlap=30
+            ).json()
+        finally:
+            # Clean up temp file
+            import os as os_module
+            try:
+                os_module.unlink(tmp_path)
+            except Exception:
+                pass
+
         detections = []
 
         for pred in result.get("predictions", []):
@@ -471,7 +530,7 @@ class LegoDetector:
             x2 = x + w // 2
             y2 = y + h // 2
 
-            conf = float(pred.get("confidence", 0))
+            conf = float(pred.get("confidence", 0)) / 100.0  # Convert from percentage
             class_name = pred.get("class", "unknown")
 
             # Skip low confidence
@@ -506,21 +565,30 @@ class LegoDetector:
         return detections
 
     def _detect_roboflow_local(self, frame: "np.ndarray") -> List[BrickDetection]:
-        """Detect using local Roboflow inference."""
-        result = self._model.infer(frame)
+        """Detect using local Roboflow inference server."""
+        # Use inference SDK client to call local server
+        # Note: confidence filtering done below, not in infer() call
+        result = self._inference_client.infer(
+            self._model_id,
+            frame
+        )
+
         detections = []
 
-        for pred in result[0].predictions if hasattr(result[0], "predictions") else []:
-            x = int(pred.x)
-            y = int(pred.y)
-            w = int(pred.width)
-            h = int(pred.height)
+        # Handle both dict and object response formats
+        predictions = result.get("predictions", []) if isinstance(result, dict) else []
+
+        for pred in predictions:
+            x = int(pred.get("x", 0))
+            y = int(pred.get("y", 0))
+            w = int(pred.get("width", 0))
+            h = int(pred.get("height", 0))
 
             x1, y1 = x - w // 2, y - h // 2
             x2, y2 = x + w // 2, y + h // 2
 
-            conf = float(pred.confidence)
-            class_name = pred.class_name
+            conf = float(pred.get("confidence", 0))
+            class_name = pred.get("class", "unknown")
 
             if conf < self.confidence_threshold:
                 continue
@@ -608,10 +676,11 @@ class LegoDetector:
         col = max(0, min(cols - 1, col))
         row = max(0, min(rows - 1, row))
 
-        col_letter = chr(ord("A") + col)
+        # Use numeric format "col-row" for grids larger than 26 columns
+        col_number = col + 1
         row_number = row + 1
 
-        return f"{col_letter}{row_number}"
+        return f"{col_number}-{row_number}"
 
     def get_info(self) -> Dict[str, Any]:
         """Get detector information."""
@@ -637,6 +706,34 @@ def get_detector(**kwargs) -> LegoDetector:
     global _detector
     with _detector_lock:
         if _detector is None:
+            # Read configuration from environment if not provided
+            if 'backend' not in kwargs:
+                backend_str = os.environ.get("DETECTION_BACKEND", "auto")
+                backend_map = {
+                    "yolo": DetectionBackend.YOLO_LOCAL,
+                    "yolo_local": DetectionBackend.YOLO_LOCAL,
+                    "roboflow": DetectionBackend.ROBOFLOW_API,
+                    "roboflow_api": DetectionBackend.ROBOFLOW_API,
+                    "roboflow_local": DetectionBackend.ROBOFLOW_LOCAL,
+                    "local": DetectionBackend.ROBOFLOW_LOCAL,
+                    "mock": DetectionBackend.MOCK,
+                }
+                if backend_str in backend_map:
+                    kwargs['backend'] = backend_map[backend_str]
+
+            if 'roboflow_api_key' not in kwargs:
+                kwargs['roboflow_api_key'] = os.environ.get("ROBOFLOW_API_KEY")
+
+            if 'roboflow_model_id' not in kwargs:
+                kwargs['roboflow_model_id'] = os.environ.get("ROBOFLOW_MODEL")
+
+            if 'confidence_threshold' not in kwargs:
+                threshold_str = os.environ.get("DETECTION_THRESHOLD", "0.5")
+                try:
+                    kwargs['confidence_threshold'] = float(threshold_str)
+                except ValueError:
+                    kwargs['confidence_threshold'] = 0.5
+
             _detector = LegoDetector(**kwargs)
     return _detector
 
