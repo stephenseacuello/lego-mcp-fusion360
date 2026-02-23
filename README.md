@@ -1,4 +1,6 @@
-# LEGO MCP Fusion 360
+# LEGO MCP Fusion 360 (Archived)
+
+> **This repository has been merged into [lego_factory_v3](https://github.com/stephenseacuello/lego_factory_v3).** All future development happens there. This repo is archived for historical reference.
 
 [![Version](https://img.shields.io/badge/version-8.0.0-blue.svg)](https://github.com/stephenseacuello/lego-mcp-fusion360)
 [![Python](https://img.shields.io/badge/python-3.10+-green.svg)](https://python.org)
