@@ -75,6 +75,38 @@ class FusionClient:
         except:
             return False
 
+    async def call_api(self, command: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        """Dispatch to named methods by command string."""
+        dispatch = {
+            "create_brick": lambda p: self.create_brick(p),
+            "export_stl": lambda p: self.export_stl(
+                p.get("component_name", ""), p.get("output_path", ""), p.get("resolution", "medium")
+            ),
+            "export_step": lambda p: self.export_step(
+                p.get("component_name", ""), p.get("output_path", "")
+            ),
+            "export_3mf": lambda p: self.export_3mf(
+                p.get("component_name", ""), p.get("output_path", "")
+            ),
+            "setup_cam": lambda p: self.generate_cam_setup(
+                p.get("component_name", ""), p.get("machine_type", "generic_3axis"), p.get("stock_material", "abs")
+            ),
+            "generate_gcode": lambda p: self.post_process(
+                p.get("component_name", ""), p.get("output_path", ""), p.get("machine_type", "grbl")
+            ),
+        }
+        handler = dispatch.get(command)
+        if handler:
+            result = await handler(params)
+            if isinstance(result, FusionResponse):
+                return result.data if result.success else {"success": False, "error": result.error}
+            return result
+        # Fallback: send as generic command (e.g. generate_laser_gcode)
+        response = await self._request("POST", "/", {"command": command, "params": params})
+        if response.success:
+            return response.data
+        return {"success": False, "error": response.error}
+
     async def create_brick(self, brick_definition: Dict[str, Any]) -> Dict[str, Any]:
         # Add-in expects command in body, not URL path
         data = {"command": "create_brick", "params": brick_definition}

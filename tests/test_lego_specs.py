@@ -259,12 +259,12 @@ class TestTolerances:
 
     def test_tolerance_is_reasonable(self):
         """Tolerance should be small but not zero."""
-        assert 0 < LEGO.TOLERANCE < 0.5
+        assert 0 < LEGO.FDM_TOLERANCE < 0.5
         assert 0 < LEGO.STUD_TOLERANCE < 0.5
 
     def test_fdm_tolerance_larger(self):
         """FDM tolerance should be larger than general."""
-        assert LEGO.FDM_TOLERANCE >= LEGO.TOLERANCE
+        assert LEGO.FDM_TOLERANCE >= LEGO.LEGO_PART_TOLERANCE
 
 
 # ==========================================

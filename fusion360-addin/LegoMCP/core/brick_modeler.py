@@ -142,16 +142,26 @@ class BrickModeler:
     def __init__(self, app: adsk.core.Application):
         self.app = app
         self._brick_counter = 0
+        self._placement_x = 0.0  # Track X offset (in cm) for spacing bricks apart
         
+    def _ensure_assembly_design(self) -> adsk.fusion.Design:
+        """Get or create a design that supports multiple components."""
+        product = self.app.activeProduct
+        if product and product.objectType == adsk.fusion.Design.classType():
+            design = adsk.fusion.Design.cast(product)
+        else:
+            # Create a fresh Fusion Design document
+            self.app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
+            design = adsk.fusion.Design.cast(self.app.activeProduct)
+        # Force Parametric mode — required for sub-component creation
+        if design.designType != adsk.fusion.DesignTypes.ParametricDesignType:
+            design.designType = adsk.fusion.DesignTypes.ParametricDesignType
+        return design
+
     @property
     def design(self) -> adsk.fusion.Design:
         """Get active design, create if needed."""
-        product = self.app.activeProduct
-        if not product or product.objectType != adsk.fusion.Design.classType():
-            # Create new design
-            doc = self.app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
-            product = self.app.activeProduct
-        return adsk.fusion.Design.cast(product)
+        return self._ensure_assembly_design()
     
     @property
     def root(self) -> adsk.fusion.Component:
@@ -166,6 +176,23 @@ class BrickModeler:
         """Generate unique brick ID."""
         self._brick_counter += 1
         return f"{prefix}_{self._brick_counter:04d}"
+
+    def _create_brick_component(self, comp_name: str, width_mm: float = 50.0) -> adsk.fusion.Component:
+        """Create a named sub-component for brick geometry."""
+        design = self._ensure_assembly_design()
+        try:
+            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
+        except Exception as e:
+            _log(f"addNewComponent failed: {e}", error=True)
+            occ = None
+        if occ:
+            comp = occ.component
+            comp.name = comp_name
+            _log(f"Created sub-component '{comp_name}'")
+        else:
+            _log(f"Falling back to root for '{comp_name}'")
+            comp = self.root
+        return comp
     
     def create_standard_brick(
         self,
@@ -218,10 +245,8 @@ class BrickModeler:
             comp_name = name or (f"Plate_{studs_x}x{studs_y}" if height_units < 0.5
                                 else f"Brick_{studs_x}x{studs_y}")
 
-            # Create new component
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            # Create component — try sub-component first, fall back to root
+            comp = self._create_brick_component(comp_name)
 
             # ══════════════════════════════════════════════════════════
             # Op 010: CREATE BASE BLOCK (NewBodyFeatureOperation)
@@ -233,13 +258,13 @@ class BrickModeler:
                 errors.append("Op 010 FAILED: Base block creation")
                 raise Exception("Cannot proceed without base body")
 
-            # Validate: Must have exactly 1 body
-            if comp.bRepBodies.count != 1:
-                _log(f"Op 010 VALIDATION FAILED: Expected 1 body, got {comp.bRepBodies.count}", error=True)
-                errors.append(f"Op 010 VALIDATION FAILED: Expected 1 body, got {comp.bRepBodies.count}")
+            # Validate: Must have at least 1 body after base creation
+            if comp.bRepBodies.count < 1:
+                _log(f"Op 010 VALIDATION FAILED: Expected >=1 body, got {comp.bRepBodies.count}", error=True)
+                errors.append(f"Op 010 VALIDATION FAILED: No bodies created")
                 raise Exception("Base body validation failed")
 
-            initial_volume = comp.bRepBodies.item(0).volume
+            initial_volume = comp.bRepBodies.item(comp.bRepBodies.count - 1).volume
             _log(f"Op 010 SUCCESS: Created base body, volume={initial_volume:.4f} cm³")
 
             # ══════════════════════════════════════════════════════════
@@ -405,9 +430,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("slope")
             comp_name = name or f"Slope_{slope_angle}_{studs_x}x{studs_y}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base block
             _log("Op 010: Creating base block...")
@@ -514,9 +537,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("arch")
             comp_name = name or f"Arch_{studs_x}x{studs_y}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base block
             _log("Op 010: Creating base block...")
@@ -607,9 +628,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("round")
             comp_name = name or f"Round_{diameter_studs}x{diameter_studs}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create cylinder base
             _log("Op 010: Creating cylinder base...")
@@ -710,9 +729,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("technic")
             comp_name = name or f"Technic_{studs_x}x{studs_y}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base block
             _log("Op 010: Creating base block...")
@@ -822,9 +839,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("wedge")
             comp_name = name or f"Wedge_{studs_x}x{studs_y}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base block
             if not self._op_010_create_base(comp, width, depth, height):
@@ -902,9 +917,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("inv_slope")
             comp_name = name or f"InvSlope_{slope_angle}_{studs_x}x{studs_y}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base block
             if not self._op_010_create_base(comp, width, depth, height):
@@ -967,9 +980,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("jumper")
             comp_name = name or f"Jumper_{studs_x}x{studs_y}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base
             if not self._op_010_create_base(comp, width, depth, height):
@@ -1039,9 +1050,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("hinge")
             comp_name = name or f"Hinge_{hinge_type}_{studs_x}x{studs_y}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base
             if not self._op_010_create_base(comp, width, depth, height):
@@ -1117,9 +1126,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("modified")
             comp_name = name or f"Modified_{modification}_{studs_x}x{studs_y}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base
             if not self._op_010_create_base(comp, width, depth, height):
@@ -1211,9 +1218,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("snot")
             comp_name = name or f"SNOT_{studs_x}x{studs_y}_{side_studs}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Op 010: Create base
             if not self._op_010_create_base(comp, width, depth, height):
@@ -1293,9 +1298,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("bracket")
             comp_name = name or f"Bracket_{bracket_type}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Base dimensions
             base_width = base_studs * STUD_PITCH
@@ -1366,9 +1369,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("cheese")
             comp_name = name or "Cheese_Slope_1x1"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Create wedge profile
             sketch = comp.sketches.add(comp.xZConstructionPlane)
@@ -1444,9 +1445,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("headlight")
             comp_name = name or "Headlight_1x1"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Create base block
             if not self._op_010_create_base(comp, width, depth, height):
@@ -1532,9 +1531,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("bar")
             comp_name = name or f"Bar_{length_studs}L"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Create cylinder
             sketch = comp.sketches.add(comp.xYConstructionPlane)
@@ -1608,9 +1605,7 @@ class BrickModeler:
             brick_id = self._generate_brick_id("clip")
             comp_name = name or f"Clip_{clip_type}"
 
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
 
             # Create base plate
             if not self._op_010_create_base(comp, width, depth, height):
@@ -1891,6 +1886,9 @@ class BrickModeler:
         Validation: bRepBodies.count == 1
         """
         try:
+            bodies_before = comp.bRepBodies.count
+            _log(f"Op 010: Bodies before={bodies_before}, comp='{comp.name}'")
+
             sketch = comp.sketches.add(comp.xYConstructionPlane)
             lines = sketch.sketchCurves.sketchLines
             lines.addTwoPointRectangle(
@@ -1914,7 +1912,9 @@ class BrickModeler:
             )
             extrudes.add(ext_input)
 
-            return comp.bRepBodies.count == 1
+            bodies_after = comp.bRepBodies.count
+            _log(f"Op 010: Bodies after={bodies_after}")
+            return bodies_after > bodies_before
         except Exception as e:
             _log(f"Op 010 Exception: {e}", error=True)
             _log(traceback.format_exc(), error=True)
@@ -2331,214 +2331,117 @@ class BrickModeler:
         height: float
     ) -> bool:
         """
-        Op 035: Add center rib for 2xN bricks (passes through tubes).
+        Op 035: Add center rib for 2xN bricks (segments between tubes).
 
         Type: JoinFeatureOperation
         Input: Hollowed shell with tubes
-        Output: Shell with center rib passing through specific tubes
+        Output: Shell with center rib segments BETWEEN tubes (not through them)
 
-        Real LEGO internal structure for 2xN bricks:
-        - The rib runs down the CENTER (lengthwise) of the brick
-        - It passes THROUGH specific tubes (every other tube starting from #2)
-        - Where it intersects a tube, there's a 2mm recess/notch
-
-        For 2x4 brick (3 tubes at positions 8, 16, 24mm):
-            - 1 rib passes through tube #2 (at Y=16mm)
-            - Rib has 2mm notch where it crosses the tube
-
-        For 2x6 brick (5 tubes at positions 8, 16, 24, 32, 40mm):
-            - 2 ribs pass through tubes #2 and #4 (at Y=16mm and Y=32mm)
-
-        Tube numbering: tubes are at Y = 8, 16, 24, ... (every 8mm)
-        Pattern: ribs at tubes 2, 4, 6, ... (even-numbered tubes)
-
-        Real LEGO 2x4 underside (top view):
-            ════════════════════════════════
-            ║                              ║
-            ║    ○        ○        ○       ║  <- 3 tubes
-            ║    │        ║        │       ║
-            ║    │════════╬════════│       ║  <- rib through middle tube
-            ║    │        ║        │       ║
-            ║                              ║
-            ════════════════════════════════
+        Creates separate rib segments in the gaps between tubes and walls.
+        For a 2x4 brick (3 tubes at Y=8, 16, 24mm):
+            Segment 1: wall (Y=1.6) to tube1 edge (Y=4.745)
+            Segment 2: tube1 edge (Y=11.255) to tube2 edge (Y=12.745)
+            Segment 3: tube2 edge (Y=19.255) to tube3 edge (Y=20.745)
+            Segment 4: tube3 edge (Y=27.255) to wall (Y=30.4)
         """
         try:
-            rib_thickness = 1.0  # 1mm thick rib
-            rib_notch_depth = 2.0  # 2mm notch where rib passes through tube
+            rib_thickness = RIB_THICKNESS  # 1mm thick rib
+            tube_radius = TUBE_OD / 2  # 3.255mm
+            clearance = 0.1  # small gap so rib doesn't fuse into tube
 
             if comp.bRepBodies.count == 0:
                 _log("Op 035: No body found", error=True)
                 return False
 
-            # Determine which dimension is 2 studs (the narrow dimension)
+            # Determine orientation
             if studs_x == 2:
-                narrow_dim = studs_x
                 long_dim = studs_y
-                rib_runs_along = "y"  # Rib runs along Y axis (lengthwise)
+                rib_runs_along = "y"
             elif studs_y == 2:
-                narrow_dim = studs_y
                 long_dim = studs_x
-                rib_runs_along = "x"  # Rib runs along X axis (lengthwise)
+                rib_runs_along = "x"
             else:
                 _log("Op 035: Not a 2xN brick, skipping center rib")
                 return True
 
-            # Number of tubes = long_dim - 1 (for 2x4: 3 tubes)
             num_tubes = long_dim - 1
             if num_tubes < 1:
-                _log("Op 035: No tubes to add ribs through")
+                _log("Op 035: No tubes, skipping")
                 return True
 
-            # Determine which tubes get ribs (every other tube starting from #2)
-            # Tube indices: 1, 2, 3, ... (1-based)
-            # Ribs through: 2, 4, 6, ...
-            rib_tube_indices = [i for i in range(2, num_tubes + 1, 2)]  # 2, 4, 6, ...
+            # Tube centers along the long axis
+            tube_centers = [i * STUD_PITCH for i in range(1, long_dim)]
 
-            if len(rib_tube_indices) == 0:
-                _log("Op 035: No tubes to add ribs through (too few tubes)")
-                return True
-
-            _log(f"Op 035: {num_tubes} tubes, adding ribs through tubes {rib_tube_indices}")
-
-            # Calculate rib dimensions
-            # Rib runs down the center, spanning from wall to wall across the 2-stud width
+            # Build list of rib segments (gaps between tube edges and walls)
             if rib_runs_along == "y":
-                # Rib runs along Y, centered on X
-                rib_center_x = narrow_dim * STUD_PITCH / 2  # Center X position (8mm for 2-wide)
-                rib_start_y = WALL_THICKNESS
-                rib_end_y = long_dim * STUD_PITCH - WALL_THICKNESS
-                rib_length = rib_end_y - rib_start_y
+                rib_center_cross = studs_x * STUD_PITCH / 2  # center X
+                wall_start = WALL_THICKNESS
+                wall_end = studs_y * STUD_PITCH - WALL_THICKNESS
             else:
-                # Rib runs along X, centered on Y
-                rib_center_y = narrow_dim * STUD_PITCH / 2
-                rib_start_x = WALL_THICKNESS
-                rib_end_x = long_dim * STUD_PITCH - WALL_THICKNESS
-                rib_length = rib_end_x - rib_start_x
+                rib_center_cross = studs_y * STUD_PITCH / 2  # center Y
+                wall_start = WALL_THICKNESS
+                wall_end = studs_x * STUD_PITCH - WALL_THICKNESS
 
-            # Rib height (from bottom to underside of top, with 2mm recess at bottom)
+            # Compute segment boundaries: wall → tube1_edge, tube1_edge → tube2_edge, ... → wall
+            segments = []
+            prev_end = wall_start
+            for tc in tube_centers:
+                seg_end = tc - tube_radius - clearance
+                if seg_end > prev_end + 0.2:  # skip tiny segments
+                    segments.append((prev_end, seg_end))
+                prev_end = tc + tube_radius + clearance
+            # Final segment: last tube edge → far wall
+            if wall_end > prev_end + 0.2:
+                segments.append((prev_end, wall_end))
+
+            _log(f"Op 035: {len(segments)} rib segments between {num_tubes} tubes")
+
             rib_height = height - TOP_THICKNESS - RIB_BOTTOM_RECESS
-
-            _log(f"Op 035: Creating center rib, length={rib_length:.1f}mm, height={rib_height:.1f}mm")
-
-            # Create the main rib body
-            sketch = comp.sketches.add(comp.xYConstructionPlane)
-            sketch.name = "Op035_CenterRib_Sketch"
-            lines = sketch.sketchCurves.sketchLines
-
-            if rib_runs_along == "y":
-                # Rib profile: rectangle centered on X, spanning Y
-                x1 = rib_center_x - rib_thickness / 2
-                x2 = rib_center_x + rib_thickness / 2
-                y1 = rib_start_y
-                y2 = rib_end_y
-            else:
-                # Rib profile: rectangle centered on Y, spanning X
-                x1 = rib_start_x
-                x2 = rib_end_x
-                y1 = rib_center_y - rib_thickness / 2
-                y2 = rib_center_y + rib_thickness / 2
-
-            lines.addTwoPointRectangle(
-                adsk.core.Point3D.create(self._cm(x1), self._cm(y1), 0),
-                adsk.core.Point3D.create(self._cm(x2), self._cm(y2), 0)
-            )
-
-            if sketch.profiles.count == 0:
-                _log("Op 035: No profile created for rib", error=True)
-                return False
-
-            # Extrude the rib from Z=RIB_BOTTOM_RECESS to Z=height-TOP_THICKNESS
             extrudes = comp.features.extrudeFeatures
+            half_t = rib_thickness / 2
 
-            # Find the rib profile (should be the only one)
-            rib_profile = sketch.profiles.item(0)
+            for idx, (seg_start, seg_end) in enumerate(segments):
+                sketch = comp.sketches.add(comp.xYConstructionPlane)
+                sketch.name = f"Op035_RibSeg{idx}_Sketch"
 
-            ext_input = extrudes.createInput(
-                rib_profile,
-                adsk.fusion.FeatureOperations.JoinFeatureOperation
-            )
-            # Start extrusion at Z=RIB_BOTTOM_RECESS (2mm up from bottom)
-            start_offset = adsk.fusion.OffsetStartDefinition.create(
-                adsk.core.ValueInput.createByReal(self._cm(RIB_BOTTOM_RECESS))
-            )
-            ext_input.startExtent = start_offset
-            ext_input.setDistanceExtent(
-                False,
-                adsk.core.ValueInput.createByReal(self._cm(rib_height))
-            )
-            rib_feature = extrudes.add(ext_input)
-            rib_feature.name = "Op035_CenterRib"
-
-            _log(f"Op 035: Created center rib")
-
-            # Now create notches where the rib passes through tubes
-            # The notch is cut from the BOTTOM of the rib (at Z=RIB_BOTTOM_RECESS)
-            # going UP by 2mm. This creates clearance for the tube opening.
-            #
-            # Real LEGO cross-section at tube intersection:
-            #     ─────────────  <- top of brick interior
-            #     │           │
-            #     │    rib    │  <- rib continues up to top
-            #     │           │
-            #     │   ┌───┐   │  <- tube wall
-            #     │   │   │   │
-            #     ════╧═══╧════  <- notch cut here (bottom 2mm of rib removed)
-            #         2mm gap     <- rib starts 2mm up from brick bottom
-            #     ──────────────  <- bottom of brick (Z=0)
-            #
-            notch_height = rib_notch_depth  # 2mm notch depth
-            notch_z_start = RIB_BOTTOM_RECESS  # Start at bottom of rib (2mm up from brick bottom)
-
-            for tube_idx in rib_tube_indices:
-                # Tube position (center)
                 if rib_runs_along == "y":
-                    tube_center_y = tube_idx * STUD_PITCH
-                    # Notch is centered on tube, spans tube diameter
-                    notch_x1 = rib_center_x - rib_thickness / 2 - 0.1  # Slightly wider
-                    notch_x2 = rib_center_x + rib_thickness / 2 + 0.1
-                    notch_y1 = tube_center_y - TUBE_OD / 2
-                    notch_y2 = tube_center_y + TUBE_OD / 2
+                    x1 = rib_center_cross - half_t
+                    x2 = rib_center_cross + half_t
+                    y1 = seg_start
+                    y2 = seg_end
                 else:
-                    tube_center_x = tube_idx * STUD_PITCH
-                    notch_x1 = tube_center_x - TUBE_OD / 2
-                    notch_x2 = tube_center_x + TUBE_OD / 2
-                    notch_y1 = rib_center_y - rib_thickness / 2 - 0.1
-                    notch_y2 = rib_center_y + rib_thickness / 2 + 0.1
+                    x1 = seg_start
+                    x2 = seg_end
+                    y1 = rib_center_cross - half_t
+                    y2 = rib_center_cross + half_t
 
-                # Create sketch for notch at the bottom of the rib
-                planes = comp.constructionPlanes
-                plane_input = planes.createInput()
-                plane_input.setByOffset(
-                    comp.xYConstructionPlane,
-                    adsk.core.ValueInput.createByReal(self._cm(notch_z_start))
-                )
-                notch_plane = planes.add(plane_input)
-                notch_plane.name = f"Op035_NotchPlane_{tube_idx}"
-
-                notch_sketch = comp.sketches.add(notch_plane)
-                notch_sketch.name = f"Op035_Notch_{tube_idx}_Sketch"
-
-                notch_sketch.sketchCurves.sketchLines.addTwoPointRectangle(
-                    adsk.core.Point3D.create(self._cm(notch_x1), self._cm(notch_y1), 0),
-                    adsk.core.Point3D.create(self._cm(notch_x2), self._cm(notch_y2), 0)
+                sketch.sketchCurves.sketchLines.addTwoPointRectangle(
+                    adsk.core.Point3D.create(self._cm(x1), self._cm(y1), 0),
+                    adsk.core.Point3D.create(self._cm(x2), self._cm(y2), 0)
                 )
 
-                if notch_sketch.profiles.count > 0:
-                    notch_profile = notch_sketch.profiles.item(0)
-                    cut_input = extrudes.createInput(
-                        notch_profile,
-                        adsk.fusion.FeatureOperations.CutFeatureOperation
-                    )
-                    # Cut upward from the bottom of the rib
-                    cut_input.setDistanceExtent(
-                        False,
-                        adsk.core.ValueInput.createByReal(self._cm(notch_height))
-                    )
-                    cut_feature = extrudes.add(cut_input)
-                    cut_feature.name = f"Op035_Notch_{tube_idx}"
-                    _log(f"Op 035: Created notch at tube {tube_idx} (bottom 2mm of rib)")
+                if sketch.profiles.count == 0:
+                    _log(f"Op 035: No profile for segment {idx}", error=True)
+                    continue
 
-            _log(f"Op 035 SUCCESS: Created center rib with {len(rib_tube_indices)} notches")
+                ext_input = extrudes.createInput(
+                    sketch.profiles.item(0),
+                    adsk.fusion.FeatureOperations.JoinFeatureOperation
+                )
+                if RIB_BOTTOM_RECESS > 0:
+                    start_offset = adsk.fusion.OffsetStartDefinition.create(
+                        adsk.core.ValueInput.createByReal(self._cm(RIB_BOTTOM_RECESS))
+                    )
+                    ext_input.startExtent = start_offset
+                ext_input.setDistanceExtent(
+                    False,
+                    adsk.core.ValueInput.createByReal(self._cm(rib_height))
+                )
+                feat = extrudes.add(ext_input)
+                feat.name = f"Op035_RibSeg{idx}"
+                _log(f"Op 035: Segment {idx} ({seg_start:.1f}-{seg_end:.1f}mm)")
+
+            _log(f"Op 035 SUCCESS: {len(segments)} rib segments created")
             return True
 
         except Exception as e:
@@ -3010,43 +2913,53 @@ class BrickModeler:
         Input: Solid brick body
         Output: Brick with arch-shaped opening
 
-        Creates a semi-circular arch cut through the brick.
+        Creates a semi-circular arch cut through the longer dimension of the brick.
+        The arch spans the long side (e.g. 4-stud side of a 1x4) and cuts through
+        the short side (1-stud width).
         """
         try:
-            _log(f"Op 080: Cutting arch with height {arch_height}mm")
+            # Arch spans the longer dimension
+            if depth >= width:
+                arch_span = depth
+                sketch_plane = comp.yZConstructionPlane  # local X=Y, local Y=Z
+                cut_distance = width
+            else:
+                arch_span = width
+                sketch_plane = comp.xZConstructionPlane  # local X=X, local Y=Z
+                cut_distance = depth
 
-            # Arch radius (half of width for semicircle)
-            arch_radius = width / 2
-            arch_center_x = width / 2
-            arch_center_z = arch_height  # Base of arch
+            inset = WALL_THICKNESS
+            span_start = inset
+            span_end = arch_span - inset
+            effective_span = span_end - span_start
 
-            # Sketch on YZ plane to draw arch profile
-            sketch = comp.sketches.add(comp.yZConstructionPlane)
+            # Arch height capped at half-span (semicircle max)
+            actual_arch_height = min(arch_height, effective_span / 2)
+
+            _log(f"Op 080: Cutting arch span={effective_span:.1f}mm, height={actual_arch_height:.1f}mm")
+
+            sketch = comp.sketches.add(sketch_plane)
             sketch.name = "Op080_Arch"
-
-            # Draw arch as a combination of rectangle + semicircle
             lines = sketch.sketchCurves.sketchLines
             arcs = sketch.sketchCurves.sketchArcs
 
-            # Rectangle below arch
-            if arch_center_z > 0:
-                lines.addTwoPointRectangle(
-                    adsk.core.Point3D.create(0, 0, 0),
-                    adsk.core.Point3D.create(self._cm(width), self._cm(arch_center_z), 0)
-                )
+            # Profile: half-moon shape at bottom of brick
+            # local X = span direction, local Y = height (Z)
+            p_left = adsk.core.Point3D.create(self._cm(span_start), 0, 0)
+            p_right = adsk.core.Point3D.create(self._cm(span_end), 0, 0)
+            p_top = adsk.core.Point3D.create(
+                self._cm(arch_span / 2), self._cm(actual_arch_height), 0
+            )
 
-            # Semicircular arc on top
-            center = adsk.core.Point3D.create(self._cm(arch_center_x), self._cm(arch_center_z), 0)
-            start = adsk.core.Point3D.create(0, self._cm(arch_center_z), 0)
-            end = adsk.core.Point3D.create(self._cm(width), self._cm(arch_center_z), 0)
-
-            arcs.addByCenterStartEnd(center, start, end)
+            # Arc from left through top to right
+            arcs.addByThreePoints(p_left, p_top, p_right)
+            # Close with bottom line
+            lines.addByTwoPoints(p_right, p_left)
 
             if sketch.profiles.count == 0:
                 _log("Op 080: No profile created", error=True)
                 return False
 
-            # Extrude cut through entire depth
             extrudes = comp.features.extrudeFeatures
             profile = sketch.profiles.item(0)
             ext_input = extrudes.createInput(
@@ -3055,7 +2968,7 @@ class BrickModeler:
             )
             ext_input.setDistanceExtent(
                 False,
-                adsk.core.ValueInput.createByReal(self._cm(depth))
+                adsk.core.ValueInput.createByReal(self._cm(cut_distance))
             )
 
             feature = extrudes.add(ext_input)
@@ -4044,9 +3957,7 @@ class BrickModeler:
             comp_name = name or f"Tile_{studs_x}x{studs_y}"
             
             # Create component
-            occ = self.root.occurrences.addNewComponent(adsk.core.Matrix3D.create())
-            comp = occ.component
-            comp.name = comp_name
+            comp = self._create_brick_component(comp_name)
             
             # Just a flat box, no studs
             self._op_010_create_base(comp, width, depth, height)

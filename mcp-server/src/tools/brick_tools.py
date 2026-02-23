@@ -72,8 +72,8 @@ def list_brick_catalog(
             {
                 "name": b.name,
                 "category": b.category.value if hasattr(b.category, "value") else b.category,
-                "part_number": b.part_number,
-                "dimensions": f"{b.studs_x}x{b.studs_y}x{b.height_plates}p",
+                "part_number": b.lego_id,
+                "dimensions": f"{b.studs_x}x{b.studs_y}x{int(b.height_units * 3)}p",
                 "description": _get_brick_description(b),
             }
         )
@@ -102,7 +102,7 @@ def get_brick_details(brick_name: str) -> Dict[str, Any]:
     # Try by part number
     if not brick:
         for b in BRICK_CATALOG.values():
-            if b.part_number == brick_name:
+            if b.lego_id == brick_name:
                 brick = b
                 break
 
@@ -112,14 +112,14 @@ def get_brick_details(brick_name: str) -> Dict[str, Any]:
     return {
         "name": brick.name,
         "category": brick.category.value if hasattr(brick.category, "value") else brick.category,
-        "part_number": brick.part_number,
+        "part_number": brick.lego_id,
         "dimensions": {
             "studs_x": brick.studs_x,
             "studs_y": brick.studs_y,
-            "height_plates": brick.height_plates,
+            "height_plates": int(brick.height_units * 3),
             "width_mm": brick.studs_x * 8.0,
             "depth_mm": brick.studs_y * 8.0,
-            "height_mm": brick.height_plates * 3.2,
+            "height_mm": brick.height_units * 3 * 3.2,
         },
         "features": {
             "stud_type": (
@@ -132,10 +132,8 @@ def get_brick_details(brick_name: str) -> Dict[str, Any]:
             ),
             "is_hollow": brick.hollow,
             "has_slope": brick.slope is not None,
-            "has_holes": len(brick.holes) > 0 if hasattr(brick, "holes") else False,
-            "has_side_features": (
-                len(brick.side_features) > 0 if hasattr(brick, "side_features") else False
-            ),
+            "has_holes": bool(brick.holes) if hasattr(brick, "holes") else False,
+            "has_side_features": bool(brick.side_features) if hasattr(brick, "side_features") else False,
         },
         "notes": brick.notes if hasattr(brick, "notes") else "",
     }
@@ -146,13 +144,14 @@ def _get_brick_description(brick: BrickDefinition) -> str:
     parts = []
 
     # Size
-    if brick.height_plates == 1:
+    height_plates = int(brick.height_units * 3)
+    if height_plates == 1:
         if hasattr(brick, "stud_type") and str(brick.stud_type) == "StudType.NONE":
             parts.append(f"{brick.studs_x}x{brick.studs_y} tile")
         else:
             parts.append(f"{brick.studs_x}x{brick.studs_y} plate")
     else:
-        bricks_high = brick.height_plates // 3
+        bricks_high = height_plates // 3
         if bricks_high == 1:
             parts.append(f"{brick.studs_x}x{brick.studs_y} brick")
         else:

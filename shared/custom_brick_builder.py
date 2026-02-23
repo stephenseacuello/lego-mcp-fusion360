@@ -254,7 +254,7 @@ class CustomBrickBuilder:
         self._bars: List[BarDefinition] = []
         self._cutouts: List[CutoutDefinition] = []
         self._text: List[TextDefinition] = []
-        self._tolerance = LEGO.TOLERANCE
+        self._tolerance = LEGO.FDM_TOLERANCE
         self._notes = ""
 
     # ========== BASE CONFIGURATION ==========
